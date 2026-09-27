@@ -1,0 +1,70 @@
+[package]
+name = "pdf-window"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+pdf-app = { path = "../pdf-app" }
+pdf-heap = { path = "../pdf-heap" }
+pdf-bytes = { path = "../pdf-bytes" }
+pdf-cli = { path = "../pdf-cli" }
+pdf-content = { path = "../pdf-content" }
+pdf-edit = { path = "../pdf-edit" }
+pdf-ocr = { path = "../pdf-ocr" }
+pdf-print = { path = "../pdf-print" }
+pdf-paint = { path = "../pdf-paint" }
+pdf-render = { path = "../pdf-render" }
+pdf-semantics = { path = "../pdf-semantics" }
+pdf-session = { path = "../pdf-session" }
+pdf-syntax = { path = "../pdf-syntax" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pdf-agent = { path = "../pdf-agent" }
+eframe = { version = "0.35.0", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.35.0", default-features = false, features = [
+    "android-native-activity",
+] }
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+pdf-security = { path = "../pdf-security" }
+eframe = { version = "0.35.0", default-features = false, features = [
+    "default_fonts",
+    "glow",
+] }
+js-sys = "0.3.77"
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+web-sys = { version = "0.3.77", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "console",
+    "Document",
+    "Element",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "MessageEvent",
+    "Performance",
+    "Url",
+    "Window",
+    "Worker",
+] }
+
+[lints]
+workspace = true

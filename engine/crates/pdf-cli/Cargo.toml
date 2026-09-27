@@ -1,0 +1,46 @@
+[package]
+name = "pdf-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+build = "build.rs"
+
+[dependencies]
+pdf-bytes = { path = "../pdf-bytes" }
+pdf-content = { path = "../pdf-content" }
+pdf-edit = { path = "../pdf-edit" }
+pdf-paint = { path = "../pdf-paint" }
+pdf-render = { path = "../pdf-render" }
+pdf-semantics = { path = "../pdf-semantics" }
+pdf-session = { path = "../pdf-session" }
+pdf-syntax = { path = "../pdf-syntax" }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "place"
+test = true
+
+[[example]]
+name = "drawings"
+test = true
+
+[[example]]
+name = "clips"
+test = true
+
+[[example]]
+name = "profiles"
+test = true
+
+[[example]]
+name = "membership"
+test = true
+
+[[example]]
+name = "hits"
+test = true

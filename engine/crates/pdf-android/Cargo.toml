@@ -1,0 +1,24 @@
+[package]
+name = "pdf-android"
+description = "PanPDF on Android: the window's entry point for the activity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "panpdf"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+pdf-window = { path = "../pdf-window" }
+pdf-scan = { path = "../pdf-scan" }
+pdf-ocr = { path = "../pdf-ocr" }
+pdf-cli = { path = "../pdf-cli" }
+jni = "0.21.1"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The converters
+        run: git clone --depth 1 https://github.com/panXDgaming/pdf_tool ../pdf_tool
+      - name: What was compiled last time
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            engine/target
+            ${{ github.workspace }}/../pdf_tool/target
+            ~/Android/src/*.tar.gz
+          key: android-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: android-
+      - name: Android SDK
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "ndk;27.3.13750724" "build-tools;35.0.0" "platforms;android-35" > /dev/null
+      - name: Rust for Android
+        run: |
+          (cd engine && rustup target add aarch64-linux-android)
+          (cd ../pdf_tool && rustup target add aarch64-linux-android)
+      - name: Fonts
+        run: python3 engine/fonts/vendor.py
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "The ANDROID_KEYSTORE secret is missing: every release must be signed with the same key."
+            exit 1
+          fi
+          mkdir -p platforms/android/out
+          echo "$KEYSTORE" | base64 -d > platforms/android/out/debug.keystore
+      - name: Tesseract
+        run: platforms/android/ocr-build.sh arm64
+      - name: Converters for Android
+        run: platforms/android/tools-build.sh arm64
+      - name: The app
+        run: platforms/android/build.sh arm64
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp platforms/android/out/panpdf.apk PanPDF.apk
+          sum=$(sha256sum PanPDF.apk | cut -c1-64)
+          version="${GITHUB_REF_NAME#v}"
+          printf 'PanPDF for Android %s: edit PDFs, scan paper with the camera, read scans (OCR), find words, convert files.\n\nAndroid 8 or newer. SHA-256: `%s`\n' "$version" "$sum" > notes.md
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" PanPDF.apk --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" PanPDF.apk --title "PanPDF for Android $version" --notes-file notes.md
+          fi
+      - name: The APK, for a run started by hand
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanPDF.apk
+          path: platforms/android/out/panpdf.apk
