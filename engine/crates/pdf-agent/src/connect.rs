@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::json::Json;
+use crate::transport::{self, HttpCall, Transport, TransportError};
 
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
@@ -633,7 +634,7 @@ impl std::fmt::Display for ConnectError {
         match self {
             Self::Invalid(s) => write!(f, "invalid AI connection: {s}"),
             Self::Cancelled => f.write_str("AI request cancelled"),
-            Self::Curl(s) => write!(f, "curl could not make the AI request: {s}"),
+            Self::Curl(s) => write!(f, "the AI request could not be made: {s}"),
             Self::ResponseTooLarge => f.write_str("the AI response is too large"),
             Self::TooLarge(s) => write!(f, "the conversation is too large to send: {s}"),
             Self::Http(s) => write!(f, "the AI service refused the request: {s}"),
@@ -913,7 +914,7 @@ impl Connection {
     ) -> Result<Reply, Failure> {
         let mut gathering = Gathering::new(self.provider.wire());
         let streaming = on_partial.is_some();
-        let body = run_curl(job, cancel, &mut |line| {
+        let body = run_job(job, cancel, &mut |line| {
             if streaming
                 && gathering.line(line)
                 && let Some(tell) = on_partial.as_mut()
@@ -1402,10 +1403,8 @@ impl Connection {
         cancel: &AtomicBool,
     ) -> Result<String, ConnectError> {
         let job = self.job("GET", suffix, None, pace)?;
-        again_after(cancel, pace.waits, || {
-            run_curl(&job, cancel, &mut |_| false)
-        })
-        .map_err(|error| redact_error(error, &self.api_key))
+        again_after(cancel, pace.waits, || run_job(&job, cancel, &mut |_| false))
+            .map_err(|error| redact_error(error, &self.api_key))
     }
 
     fn job(
@@ -1439,6 +1438,24 @@ impl Connection {
         }
         if self.provider == Provider::Anthropic {
             headers.push("anthropic-version: 2023-06-01".to_owned());
+        }
+        if let Some(via) = transport::registered() {
+            return Ok(Job {
+                config: String::new(),
+                headers_at: None,
+                body_kept: None,
+                idle: pace.idle,
+                cap: pace.cap,
+                settle: pace.settle,
+                local,
+                call: Some(Call {
+                    method: method.to_owned(),
+                    url,
+                    headers,
+                    body: payload.map(str::to_owned),
+                    via,
+                }),
+            });
         }
         let headers_at = Scratch::create(b"").ok();
         let (data, body_at) = match payload {
@@ -1489,8 +1506,17 @@ impl Connection {
             cap: pace.cap,
             settle: pace.settle,
             local,
+            call: None,
         })
     }
+}
+
+struct Call {
+    method: String,
+    url: String,
+    headers: Vec<String>,
+    body: Option<String>,
+    via: Transport,
 }
 
 struct Job {
@@ -1508,6 +1534,7 @@ struct Job {
     cap: Duration,
     settle: Duration,
     local: bool,
+    call: Option<Call>,
 }
 
 impl Job {
@@ -1934,6 +1961,80 @@ fn no_console(command: &mut Command) {
 )]
 fn no_console(_command: &mut Command) {}
 
+fn run_job(
+    job: &Job,
+    cancel: &AtomicBool,
+    on_line: &mut dyn FnMut(&str) -> bool,
+) -> Result<String, Failure> {
+    match &job.call {
+        Some(call) => run_through(job, call, cancel, on_line),
+        None => run_curl(job, cancel, on_line),
+    }
+}
+
+fn run_through(
+    job: &Job,
+    call: &Call,
+    cancel: &AtomicBool,
+    on_line: &mut dyn FnMut(&str) -> bool,
+) -> Result<String, Failure> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ConnectError::Cancelled.into());
+    }
+    let asking = HttpCall {
+        method: &call.method,
+        url: &call.url,
+        headers: &call.headers,
+        body: call.body.as_deref().map(str::as_bytes),
+        idle: job.idle,
+        cap: job.cap,
+        cancel,
+    };
+    let answer = (call.via)(&asking).map_err(|error| stopped_on_the_way(error, job))?;
+    if answer.body.len() > MAX_RESPONSE {
+        return Err(ConnectError::ResponseTooLarge.into());
+    }
+    let body = String::from_utf8(answer.body)
+        .map_err(|_| ConnectError::Protocol("answer was not UTF-8".to_owned()))?;
+    let seen = headers_seen(&answer.headers);
+    let headers = Headers {
+        status: Some(answer.status),
+        retry_after: seen.retry_after,
+    };
+    if !(200..300).contains(&answer.status) {
+        return Err(refused(&headers, error_text(&body)));
+    }
+    for line in body.split_inclusive('\n') {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ConnectError::Cancelled.into());
+        }
+        on_line(line.trim_end_matches(['\n', '\r']));
+    }
+    Ok(body)
+}
+
+fn stopped_on_the_way(error: TransportError, job: &Job) -> Failure {
+    match error {
+        TransportError::Cancelled => ConnectError::Cancelled.into(),
+        TransportError::TimedOut => Failure {
+            tries: 1,
+            ..Failure::transient(ConnectError::Curl(format!(
+                "the AI service sent nothing for {} seconds",
+                job.idle.as_secs_f64()
+            )))
+        },
+        TransportError::Unreachable(said) => {
+            let tries = if job.local { 0 } else { A_FEW };
+            Failure {
+                error: ConnectError::Curl(said),
+                transient: tries > 0,
+                wait: None,
+                tries,
+            }
+        }
+    }
+}
+
 fn run_curl(
     job: &Job,
     cancel: &AtomicBool,
@@ -2115,7 +2216,8 @@ fn loopback_authority(authority: &str) -> bool {
     let (host, port) = authority
         .split_once(':')
         .map_or((authority, None), |(host, port)| (host, Some(port)));
-    matches!(host, "127.0.0.1" | "localhost")
+    (matches!(host, "127.0.0.1" | "localhost")
+        || (cfg!(target_os = "android") && host == "10.0.2.2"))
         && port.is_none_or(|digits| {
             !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
         })
@@ -6631,6 +6733,7 @@ data: [DONE]
             cap: Duration::from_secs(10),
             settle: Duration::from_secs(1),
             local: true,
+            call: None,
         };
         let failure = run_curl(&job, &AtomicBool::new(false), &mut |_| false).unwrap_err();
         assert!(
@@ -6944,3 +7047,6 @@ data: {\"type\":\"message_stop\"}
         );
     }
 }
+
+#[cfg(test)]
+mod transport_tests;

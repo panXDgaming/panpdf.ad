@@ -2,11 +2,14 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::time::Duration;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString, JValue, JValueOwned};
 use jni::objects::{JFloatArray, JIntArray, JObjectArray};
 use jni::sys::{jboolean, jfloatArray, jint, jintArray};
+use pdf_agent::transport::{HttpAnswer, HttpCall, TransportError};
 use pdf_window::android::{AndroidApp, Host};
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
@@ -336,6 +339,7 @@ extern "system" fn Java_org_panpdf_app_PanActivity_nativePaths(
         pdf_ocr::store::keep_data_in(files.join("panpdf"));
         pdf_window::android::set_paths(libraries.clone(), files.clone());
         pdf_ocr::store::download_with(download);
+        pdf_agent::transport::send_with(send);
         pdf_cli::use_package_root(files.join("fonts"));
     }
     if let Ok(global) = env.new_global_ref(&class) {
@@ -343,24 +347,37 @@ extern "system" fn Java_org_panpdf_app_PanActivity_nativePaths(
     }
 }
 
-fn download(address: &str, path: &Path) -> Result<(), String> {
+fn in_the_activity_class<R>(
+    make: impl for<'a> FnOnce(&mut JNIEnv<'a>, &JClass<'a>) -> jni::errors::Result<R>,
+) -> Result<R, String> {
     let app = APP.get().ok_or("no activity")?;
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) }
         .map_err(|error| error.to_string())?;
     let mut env = vm
         .attach_current_thread_permanently()
         .map_err(|error| error.to_string())?;
-    let path = path.to_string_lossy();
-    env.with_local_frame(8, |env| -> jni::errors::Result<Option<String>> {
-        let address = env.new_string(address)?;
-        let path = env.new_string(&*path)?;
+    env.with_local_frame(64, |env| -> jni::errors::Result<R> {
         let class = ACTIVITY_CLASS
             .get()
             .map(|global| JClass::from(env.new_local_ref(global.as_obj()).unwrap_or_default()))
             .ok_or(jni::errors::Error::NullPtr("the activity's class"))?;
+        make(env, &class).inspect_err(|_| {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+        })
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn download(address: &str, path: &Path) -> Result<(), String> {
+    let path = path.to_string_lossy();
+    in_the_activity_class(|env, class| {
+        let address = env.new_string(address)?;
+        let path = env.new_string(&*path)?;
         let answer = env
             .call_static_method(
-                &class,
+                class,
                 "download",
                 "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                 &[JValue::Object(&address), JValue::Object(&path)],
@@ -371,9 +388,99 @@ fn download(address: &str, path: &Path) -> Result<(), String> {
         }
         let answer = JString::from(answer);
         Ok(Some(env.get_string(&answer)?.into()))
-    })
-    .map_err(|error| error.to_string())?
+    })?
     .map_or(Ok(()), Err)
+}
+
+static NEXT_CALL: AtomicI32 = AtomicI32::new(1);
+
+const STOP_WATCH: Duration = Duration::from_millis(50);
+
+fn seconds(wait: Duration) -> i32 {
+    i32::try_from(wait.as_secs().max(1)).unwrap_or(i32::MAX)
+}
+
+fn send(call: &HttpCall<'_>) -> Result<HttpAnswer, TransportError> {
+    let id = NEXT_CALL.fetch_add(1, Ordering::Relaxed);
+    let over = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !over.load(Ordering::Acquire) {
+                if call.cancel.load(Ordering::Relaxed) {
+                    let _ = in_the_activity_class(|env, class| {
+                        env.call_static_method(class, "abort", "(I)V", &[JValue::Int(id)])
+                            .map(|_| ())
+                    });
+                    return;
+                }
+                std::thread::sleep(STOP_WATCH);
+            }
+        });
+        let answer = request(id, call);
+        over.store(true, Ordering::Release);
+        answer
+    })
+}
+
+fn request(id: i32, call: &HttpCall<'_>) -> Result<HttpAnswer, TransportError> {
+    let heard = in_the_activity_class(|env, class| {
+        let method = env.new_string(call.method)?;
+        let address = env.new_string(call.url)?;
+        let strings = env.find_class("java/lang/String")?;
+        let nothing = JObject::null();
+        let headers = env.new_object_array(
+            i32::try_from(call.headers.len()).unwrap_or(i32::MAX),
+            &strings,
+            &nothing,
+        )?;
+        for (at, header) in (0..).zip(call.headers) {
+            let header = env.new_string(header)?;
+            env.set_object_array_element(&headers, at, &header)?;
+        }
+        let body: JObject<'_> = match call.body {
+            Some(bytes) => JObject::from(env.byte_array_from_slice(bytes)?),
+            None => JObject::null(),
+        };
+        let answer = env
+            .call_static_method(
+                class,
+                "http",
+                "(ILjava/lang/String;Ljava/lang/String;[Ljava/lang/String;[BII)[Ljava/lang/String;",
+                &[
+                    JValue::Int(id),
+                    JValue::Object(&method),
+                    JValue::Object(&address),
+                    JValue::Object(&headers),
+                    JValue::Object(&body),
+                    JValue::Int(seconds(call.idle)),
+                    JValue::Int(seconds(call.cap)),
+                ],
+            )?
+            .l()?;
+        let answer = JObjectArray::from(answer);
+        let mut parts = Vec::new();
+        for at in 0..3 {
+            let part = JString::from(env.get_object_array_element(&answer, at)?);
+            parts.push(String::from(env.get_string(&part)?));
+        }
+        Ok(parts)
+    })
+    .map_err(TransportError::Unreachable)?;
+    let [first, second, third] = <[String; 3]>::try_from(heard)
+        .map_err(|_| TransportError::Unreachable("the phone gave no answer".to_owned()))?;
+    match first.as_str() {
+        "cancelled" => Err(TransportError::Cancelled),
+        "timeout" => Err(TransportError::TimedOut),
+        "error" => Err(TransportError::Unreachable(second)),
+        status => status
+            .parse::<u16>()
+            .map(|status| HttpAnswer {
+                status,
+                headers: second,
+                body: third.into_bytes(),
+            })
+            .map_err(|_| TransportError::Unreachable("the phone gave no status".to_owned())),
+    }
 }
 
 #[unsafe(no_mangle)]

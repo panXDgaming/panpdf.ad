@@ -2292,6 +2292,7 @@ name = "pdf-android"
 version = "0.1.0"
 dependencies = [
  "jni 0.21.1",
+ "pdf-agent",
  "pdf-cli",
  "pdf-ocr",
  "pdf-scan",

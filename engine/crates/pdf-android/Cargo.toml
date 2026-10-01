@@ -13,6 +13,7 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "android")'.dependencies]
+pdf-agent = { path = "../pdf-agent" }
 pdf-window = { path = "../pdf-window" }
 pdf-scan = { path = "../pdf-scan" }
 pdf-ocr = { path = "../pdf-ocr" }
