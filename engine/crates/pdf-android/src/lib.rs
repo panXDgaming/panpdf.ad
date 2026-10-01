@@ -14,6 +14,10 @@ static APP: OnceLock<AndroidApp> = OnceLock::new();
 static ACTIVITY_CLASS: OnceLock<jni::objects::GlobalRef> = OnceLock::new();
 
 #[unsafe(no_mangle)]
+#[expect(
+    clippy::no_mangle_with_rust_abi,
+    reason = "the activity glue looks this function up by name and calls it with the Rust ABI"
+)]
 fn android_main(app: AndroidApp) {
     let _ = APP.set(app.clone());
     let host = Host {
@@ -53,6 +57,15 @@ fn call(
         Ok(())
     })
     .map_err(|error| error.to_string())
+}
+
+fn rgba_of(argb: &[i32]) -> Vec<u8> {
+    argb.iter()
+        .flat_map(|&pixel| {
+            let [_, red, green, blue] = pixel.to_be_bytes();
+            [red, green, blue, 255]
+        })
+        .collect()
 }
 
 fn string<'local>(
@@ -266,17 +279,10 @@ extern "system" fn Java_org_panpdf_app_ScanActivity_flattenSheet<'local>(
     {
         return std::ptr::null_mut();
     }
-    let rgba: Vec<u8> = argb
-        .iter()
-        .flat_map(|&p| {
-            let [_, r, g, b] = p.to_be_bytes();
-            [r, g, b, 255]
-        })
-        .collect();
     let picture = pdf_scan::Rgba {
         width: w,
         height: h,
-        pixels: rgba,
+        pixels: rgba_of(&argb),
     };
     let sheet: pdf_scan::Corners = [
         (points[0], points[1]),
@@ -299,7 +305,9 @@ extern "system" fn Java_org_panpdf_app_ScanActivity_flattenSheet<'local>(
     out.push(ph);
     out.extend(
         page.pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| i32::from_be_bytes([0xFF, p[0], p[1], p[2]])),
     );
     let Ok(length) = i32::try_from(out.len()) else {
@@ -411,13 +419,7 @@ extern "system" fn Java_org_panpdf_app_ScanActivity_lookForSheet<'local>(
     let picture = pdf_scan::Rgba {
         width: w,
         height: h,
-        pixels: argb
-            .iter()
-            .flat_map(|&p| {
-                let [_, r, g, b] = p.to_be_bytes();
-                [r, g, b, 255]
-            })
-            .collect(),
+        pixels: rgba_of(&argb),
     };
     let Some(found) = pdf_scan::quad::carried().and_then(|net| net.look(&picture, turns)) else {
         return std::ptr::null_mut();
@@ -451,13 +453,7 @@ extern "system" fn Java_org_panpdf_app_ScanActivity_cornersInPhoto<'local>(
     let picture = pdf_scan::Rgba {
         width: w,
         height: h,
-        pixels: argb
-            .iter()
-            .flat_map(|&p| {
-                let [_, r, g, b] = p.to_be_bytes();
-                [r, g, b, 255]
-            })
-            .collect(),
+        pixels: rgba_of(&argb),
     };
     let Some(corners) = pdf_scan::corners_in_photo(&picture) else {
         return std::ptr::null_mut();

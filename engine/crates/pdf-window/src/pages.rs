@@ -1203,7 +1203,7 @@ fn rested_on(ui: &egui::Ui, card: &egui::Response) -> bool {
     true
 }
 
-fn lift(rect: egui::Rect, blur: u8) -> egui::Shape {
+pub(crate) fn lift(rect: egui::Rect, blur: u8) -> egui::Shape {
     egui::Shadow {
         offset: [0, 2],
         blur,
@@ -1279,6 +1279,8 @@ impl Window {
         let view = room::View {
             pages_folded: self.pages_folded,
             pages_width: self.pages_width,
+            dark: self.dark_chosen.then_some(self.dark),
+            frames: self.show_frames,
         };
         if let Some(folder) = file.parent() {
             let _ = std::fs::create_dir_all(folder);

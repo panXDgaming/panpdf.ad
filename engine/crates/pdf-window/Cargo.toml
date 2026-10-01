@@ -24,6 +24,7 @@ pdf-syntax = { path = "../pdf-syntax" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pdf-agent = { path = "../pdf-agent" }
+pdf-convert = { path = "../pdf-convert", features = ["run"] }
 eframe = { version = "0.35.0", default-features = false, features = [
     "default_fonts",
     "glow",

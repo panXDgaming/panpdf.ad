@@ -315,9 +315,6 @@ impl Window {
     pub(crate) fn block_toolbar(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
         self.toolbar_area = None;
-        if !self.show_frames {
-            return;
-        }
         if self.text_draft.is_some() {
             self.drawn_frame_toolbar(ui);
             return;
@@ -427,7 +424,7 @@ impl Window {
             } else if narrow {
                 (view.width() - 2.0 * POPUP_MARGIN).max(1.0)
             } else {
-                760.0
+                self.toolbar_width
             },
             if warning {
                 rows_height + 18.0
@@ -569,6 +566,9 @@ impl Window {
             })
         });
         self.toolbar_area = Some(drawn.inner.response.rect);
+        if !narrow {
+            self.toolbar_width = drawn.inner.response.rect.width();
+        }
         if delete {
             self.delete_the_object();
             return;
@@ -838,9 +838,6 @@ impl Window {
 
     pub(crate) fn object_toolbar(&mut self, ui: &mut egui::Ui) {
         let lang = self.lang;
-        if !self.show_frames {
-            return;
-        }
         let Pointing::Object { page, object } = self.pointing else {
             return;
         };
@@ -1200,6 +1197,8 @@ pub(crate) fn toolbar_frame(ui: &mut egui::Ui) -> egui::Frame {
 }
 
 const TOOLBAR_SURFACE: &str = "toolbar-surface";
+
+pub(crate) const TOOLBAR_WIDTH: f32 = 470.0;
 
 pub(crate) fn press_belongs_to_the_toolbar(area: Option<egui::Rect>, at: egui::Pos2) -> bool {
     area.is_some_and(|area| area.contains(at))

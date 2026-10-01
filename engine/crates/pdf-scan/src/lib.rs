@@ -31,7 +31,9 @@ impl Rgba {
     pub fn grey(&self) -> Grey {
         let pixels = self
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 let (r, g, b) = (u32::from(p[0]), u32::from(p[1]), u32::from(p[2]));
                 u8::try_from((r * 77 + g * 150 + b * 29) >> 8).unwrap_or(u8::MAX)

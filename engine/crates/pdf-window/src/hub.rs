@@ -35,6 +35,50 @@ fn now() -> u64 {
     crate::moment::unix_seconds()
 }
 
+pub(crate) const WRITE_AFTER: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Due {
+    Nothing,
+    Wait(f64),
+    Now,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Keeping {
+    tried: Option<(PathBuf, usize)>,
+    changed_at: Option<f64>,
+}
+
+impl Keeping {
+    pub(crate) fn is_new(&mut self, path: &Path, page: usize) -> bool {
+        let same = self
+            .tried
+            .as_ref()
+            .is_some_and(|(tried, at)| tried == path && *at == page);
+        if !same {
+            self.tried = Some((path.to_path_buf(), page));
+        }
+        !same
+    }
+
+    pub(crate) fn changed(&mut self, now: f64) {
+        self.changed_at.get_or_insert(now);
+    }
+
+    pub(crate) fn written(&mut self) {
+        self.changed_at = None;
+    }
+
+    pub(crate) fn due(&self, now: f64) -> Due {
+        match self.changed_at {
+            None => Due::Nothing,
+            Some(then) if now - then >= WRITE_AFTER => Due::Now,
+            Some(then) => Due::Wait((WRITE_AFTER - (now - then)).max(0.0)),
+        }
+    }
+}
+
 impl Window {
     pub(crate) fn has_document(&self) -> bool {
         self.untitled || !self.opened.as_os_str().is_empty()
@@ -51,15 +95,31 @@ impl Window {
     pub(crate) fn remember_file(&mut self, path: &Path) {
         self.recent = recent::remember(&self.recent, path, self.focus, now());
         self.write_recent();
+        self.recent_keeping.written();
     }
 
-    pub(crate) fn keep_the_page_in_the_list(&mut self) {
-        let listed = self
-            .recent
-            .first()
-            .is_some_and(|head| head.path == self.opened && head.page == self.focus);
-        if !listed && self.loading.is_none() {
-            self.remember_here();
+    pub(crate) fn keep_the_page_in_the_list(&mut self, ctx: &egui::Context) {
+        let seen = ctx.input(|input| input.time);
+        if self.loading.is_none() && self.recent_keeping.is_new(&self.opened, self.focus) {
+            let next = recent::remember(&self.recent, &self.opened, self.focus, now());
+            if next != self.recent {
+                self.recent = next;
+                self.recent_keeping.changed(seen);
+            }
+        }
+        match self.recent_keeping.due(seen) {
+            Due::Now => self.flush_the_recent_list(),
+            Due::Wait(seconds) => {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(seconds));
+            }
+            Due::Nothing => {}
+        }
+    }
+
+    pub(crate) fn flush_the_recent_list(&mut self) {
+        if self.recent_keeping.due(f64::INFINITY) == Due::Now {
+            self.write_recent();
+            self.recent_keeping.written();
         }
     }
 
@@ -140,6 +200,36 @@ impl Window {
         true
     }
 
+    fn chooser_title(&self) -> Home {
+        match self.choosing_for {
+            crate::page_actions::Choosing::Open => pdf_app::wording::Home::OpenFile,
+            crate::page_actions::Choosing::Pages { .. } => pdf_app::wording::Home::PagesFromFile,
+            crate::page_actions::Choosing::Picture => pdf_app::wording::Home::PictureFromFile,
+            crate::page_actions::Choosing::Copy
+                if self.untitled && self.destination.as_os_str().is_empty() =>
+            {
+                pdf_app::wording::Home::SaveNewDocument
+            }
+            crate::page_actions::Choosing::Copy => pdf_app::wording::Home::SaveACopy,
+            crate::page_actions::Choosing::PagesOut(_) => pdf_app::wording::Home::PagesToFile,
+            crate::page_actions::Choosing::Pieces(_) => pdf_app::wording::Home::SplitToFiles,
+            crate::page_actions::Choosing::PagesAsPictures { .. }
+            | crate::page_actions::Choosing::PictureOut(_) => {
+                pdf_app::wording::Home::PagesToPictures
+            }
+            crate::page_actions::Choosing::PicturesIn { before: Some(_) } => {
+                pdf_app::wording::Home::PicturesToInsert
+            }
+            crate::page_actions::Choosing::PicturesIn { before: None }
+            | crate::page_actions::Choosing::PdfOfPictures(_) => {
+                pdf_app::wording::Home::PicturesToPages
+            }
+            crate::page_actions::Choosing::ChatAttachment => {
+                pdf_app::wording::Home::FilesForTheChat
+            }
+        }
+    }
+
     pub(crate) fn choose_a_file(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
         if self.pick_in_the_browser() {
@@ -167,6 +257,7 @@ impl Window {
         if self.write_on_the_phone() {
             return;
         }
+        let title = self.chooser_title();
         let Some(chooser) = self.chooser.as_mut() else {
             return;
         };
@@ -176,37 +267,12 @@ impl Window {
             self.write_what_was_chosen(&path);
             return;
         }
-        let title = match self.choosing_for {
-            crate::page_actions::Choosing::Open => pdf_app::wording::Home::OpenFile,
-            crate::page_actions::Choosing::Pages { .. } => pdf_app::wording::Home::PagesFromFile,
-            crate::page_actions::Choosing::Picture => pdf_app::wording::Home::PictureFromFile,
-            crate::page_actions::Choosing::Copy
-                if self.untitled && self.destination.as_os_str().is_empty() =>
-            {
-                pdf_app::wording::Home::SaveNewDocument
-            }
-            crate::page_actions::Choosing::Copy => pdf_app::wording::Home::SaveACopy,
-            crate::page_actions::Choosing::PagesOut(_) => pdf_app::wording::Home::PagesToFile,
-            crate::page_actions::Choosing::Pieces(_) => pdf_app::wording::Home::SplitToFiles,
-            crate::page_actions::Choosing::PagesAsPictures { .. }
-            | crate::page_actions::Choosing::PictureOut(_) => {
-                pdf_app::wording::Home::PagesToPictures
-            }
-            crate::page_actions::Choosing::PicturesIn { before: Some(_) } => {
-                pdf_app::wording::Home::PicturesToInsert
-            }
-            crate::page_actions::Choosing::PicturesIn { before: None }
-            | crate::page_actions::Choosing::PdfOfPictures(_) => {
-                pdf_app::wording::Home::PicturesToPages
-            }
-            crate::page_actions::Choosing::ChatAttachment => {
-                pdf_app::wording::Home::FilesForTheChat
-            }
-        };
-        match chooser.show(ctx, self.lang, title) {
+        match chooser.show(ctx, self.lang, &Message::Home(title).say(self.lang)) {
             Chose::Nothing => {}
             Chose::Cancelled => {
                 self.chooser = None;
+                self.forget_the_wish_to_read_text();
+                self.saving_then_leaving = None;
                 self.choosing_for = crate::page_actions::Choosing::Open;
             }
             Chose::Open(path) => {
@@ -255,6 +321,7 @@ impl Window {
             Chose::Save(path) => {
                 self.chooser = None;
                 self.write_what_was_chosen(&path);
+                self.carry_on_after_saving(ctx);
             }
         }
     }
@@ -385,6 +452,33 @@ impl Window {
                 self.asking_to_open = true;
             }
         });
+        #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+        {
+            ui.add_space(between);
+            self.the_tools_tile(ui, room, idle);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_tools_tile(&mut self, ui: &mut egui::Ui, wide: f32, idle: bool) {
+        let words = |sentence: pdf_app::wording::Tools| sentence.say(self.lang);
+        if action_tile(
+            ui,
+            wide,
+            Icon::Tools,
+            &words(pdf_app::wording::Tools::HomeTile),
+            &words(pdf_app::wording::Tools::HomeTileHelp),
+            idle,
+        ) {
+            self.open_the_tools(None);
+        }
+    }
+
+    pub(crate) fn forget_the_wish_to_read_text(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.read_text_after_opening = false;
+        }
     }
 
     fn home_column(&mut self, ui: &mut egui::Ui, idle: bool, say: &dyn Fn(Home) -> String) {
@@ -688,4 +782,40 @@ pub fn pdfs_in(directory: &Path) -> Vec<PathBuf> {
         .collect();
     found.sort();
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{Due, Keeping, WRITE_AFTER};
+
+    #[test]
+    fn a_changed_list_is_written_a_second_after_the_first_change_and_not_at_each_page_passed() {
+        let mut keeping = Keeping::default();
+        assert_eq!(keeping.due(5.0), Due::Nothing);
+        keeping.changed(10.0);
+        keeping.changed(10.6);
+        let Due::Wait(left) = keeping.due(10.2) else {
+            panic!("a change a moment ago is not due yet");
+        };
+        assert!((left - (WRITE_AFTER - 0.2)).abs() < 1e-9, "{left}");
+        assert_eq!(
+            keeping.due(10.0 + WRITE_AFTER),
+            Due::Now,
+            "the later change did not push the writing back"
+        );
+        keeping.written();
+        assert_eq!(keeping.due(99.0), Due::Nothing);
+    }
+
+    #[test]
+    fn a_page_is_looked_at_once_however_many_frames_it_stays_in_view() {
+        let mut keeping = Keeping::default();
+        let file = Path::new("/documents/report.pdf");
+        assert!(keeping.is_new(file, 0));
+        assert!(!keeping.is_new(file, 0), "the same page again");
+        assert!(keeping.is_new(file, 1), "another page");
+        assert!(keeping.is_new(Path::new("/documents/other.pdf"), 1));
+    }
 }

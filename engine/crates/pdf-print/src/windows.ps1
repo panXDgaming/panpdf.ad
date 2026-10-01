@@ -1,3 +1,13 @@
+# PanPDF's side of printing on Windows. pdf_print::windows runs this; it is
+# not meant to be run by hand.
+#
+# What to do comes in PANPDF_* environment variables, and so does every name.
+# An environment variable is never parsed as script, so no printer name or
+# title can become code. To print, the sheets come on standard input, already
+# drawn at the printer's resolution. The answer goes to standard output as
+# tab-separated lines: a word, then numbers, or text as UTF-8 in base64 so no
+# name can break a line. Sizes are in hundredths of an inch, as
+# System.Drawing.Printing states them.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
@@ -9,6 +19,8 @@ function Text([string]$text) {
     [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($text))
 }
 
+# Within four hundredths of an inch: a millimetre, the tolerance papers are
+# matched with everywhere else in PanPDF.
 function Same([double]$one, [double]$other) {
     [Math]::Abs($one - $other) -le 4
 }
@@ -68,6 +80,8 @@ function Ask {
                 $known = $true
             }
         }
+        # Asking a driver for a paper's printable area is asking it to make
+        # a device context; only the papers PanPDF offers are asked about.
         if (-not $known) {
             continue
         }
@@ -111,6 +125,8 @@ function Print-Sheets {
     $document = New-Object System.Drawing.Printing.PrintDocument
     $document.PrinterSettings = $settings
     $document.DocumentName = $env:PANPDF_TITLE
+    # No window of Windows's own saying "printing page 3": the dialogue that
+    # started this says how far the job has got.
     $document.PrintController = New-Object System.Drawing.Printing.StandardPrintController
     $document.DefaultPageSettings.PaperSize = $paper
     $document.DefaultPageSettings.Color = ($env:PANPDF_COLOUR -eq '1')
@@ -121,6 +137,8 @@ function Print-Sheets {
     $script:stopped = $false
     $script:sheet = $null
 
+    # Before each sheet: its size, which says which way the paper stands.
+    # Standard input ending here is PanPDF stopping the job.
     $document.add_QueryPageSettings({
         param($printing, $asked)
         try {
@@ -137,6 +155,12 @@ function Print-Sheets {
         $asked.PageSettings.Landscape = ($across -gt $down)
     })
 
+    # The sheet's pixels: rows top to bottom, blue-green-red, each row
+    # padded to four bytes -- a 24-bit bitmap's own layout. The picture
+    # covers the whole paper, so it is drawn from the paper's corner, which
+    # is the hard margin up and to the left of where Windows puts the origin
+    # (PrintDocument.OriginAtMargins is false: the origin is the printable
+    # area's corner).
     $document.add_PrintPage({
         param($printing, $asked)
         $width, $height, $across, $down = $script:sheet
