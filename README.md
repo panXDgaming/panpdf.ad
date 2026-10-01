@@ -23,6 +23,23 @@ Free &middot; open source &middot; no account &middot; Android 8 or newer
 Not on Google Play yet. Rather not install? Use it in the browser at
 [panpdf.org](https://panpdf.org).
 
+## The assistant
+
+Tap the assistant button in the top bar to ask a model about the page you are
+reading, or to have it edit, stamp, convert and read your document for you.
+On a phone it covers the page; **Close** (or the back button) puts it away.
+
+- **API key.** Choose OpenAI, Claude or Gemini, paste your key and tap
+  **Connect**. The key is locked and kept in the app's own folder on the
+  phone (`files/panpdf/ai-key`, readable by PanPDF alone); it is sent only to
+  the provider you chose.
+- **Models on your own network.** The app connects over HTTPS. Plain HTTP is
+  allowed only for `localhost`, `127.0.0.1` and `10.0.2.2` (the emulator's name
+  for its computer), so an Ollama or LM Studio server on the phone itself, or
+  on the emulator's host, works without a key. Anything else must use HTTPS.
+- Answers arrive whole rather than word by word: the phone's network is used
+  through the system's HTTP stack, not `curl`.
+
 ## Build it yourself
 
 Needs Rust (pinned in `engine/rust-toolchain.toml`) with the
@@ -47,6 +64,8 @@ platforms/android/build.sh arm64            # -> platforms/android/out/panpdf.ap
 | `engine/crates/pdf-android` | the native library the activity loads |
 | `engine/crates/pdf-window` | the editor's window, the same on every platform |
 | `engine/crates/pdf-scan` | finding the page in a photo and flattening it |
+| `engine/crates/pdf-agent` | the assistant's conversation, tools and, on the phone, its network |
+| `engine/convert/` | the converters the assistant and the desktop's Tools room run in-process |
 | `engine/` | the rest of PanPDF's engine |
 
 ## Licence
