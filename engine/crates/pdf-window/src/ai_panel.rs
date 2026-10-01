@@ -1136,8 +1136,12 @@ impl Window {
             return;
         }
         self.ai.open = false;
-        let now = ctx.input(|input| input.time);
-        self.ai_flow = Some(crate::room::Flow::new(self.ai.width, 0.0, now));
+        self.ai_flow = if self.on_a_phone(ctx) {
+            None
+        } else {
+            let now = ctx.input(|input| input.time);
+            Some(crate::room::Flow::new(self.ai.width, 0.0, now))
+        };
     }
 
     pub(crate) fn ai_sheet(&mut self, ui: &mut egui::Ui) {

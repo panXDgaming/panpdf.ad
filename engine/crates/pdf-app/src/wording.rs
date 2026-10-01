@@ -3,6 +3,7 @@ mod controls;
 mod edits;
 mod facts;
 mod home;
+mod phone;
 mod tools;
 
 pub use assistant::Assistant;
@@ -10,6 +11,7 @@ pub use controls::Control;
 pub use edits::{BlockMove, Done, Hidden, Layout, LayoutWhy, PictureMove, Refusal, Side, StampWhy};
 pub use facts::Fact;
 pub use home::Home;
+pub use phone::Phone;
 pub use tools::Tools;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -753,6 +755,7 @@ pub enum Message {
     Home(Home),
     Control(Control),
     Assistant(Assistant),
+    Phone(Phone),
     Quiet,
     DrawingSpeed(crate::speed::Summary),
     EditSpeed(pdf_session::stages::Stages),
@@ -2143,6 +2146,7 @@ impl Message {
             Self::Home(home) => home.say(Lang::English),
             Self::Control(control) => control.say(Lang::English),
             Self::Assistant(said) => said.say(Lang::English),
+            Self::Phone(said) => said.say(Lang::English),
             Self::Refused(refusal) => refusal.say(Lang::English),
             Self::Quiet => String::new(),
             Self::DrawingSpeed(speed) => format!(

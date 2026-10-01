@@ -6,6 +6,8 @@ use std::sync::{Arc, mpsc};
 use eframe::egui;
 
 use pdf_app::ocr_choice::Choice;
+#[cfg(target_os = "android")]
+use pdf_app::wording::Phone;
 use pdf_app::wording::{Command, Done, Fact, Lang, Message};
 use pdf_edit::stamp::Only;
 use pdf_ocr::Quality;
@@ -15,6 +17,9 @@ use crate::dialog;
 use crate::format::quiet_icon_button;
 use crate::icons::Icon;
 use crate::window_state::{OcrDraft, OcrFetch, OcrReading, OcrWhich, PageRead, Window};
+
+#[cfg(target_os = "android")]
+mod simple;
 
 const PANEL_WIDTH: f32 = 340.0;
 
@@ -37,7 +42,15 @@ fn remembered() -> Choice {
     choice_file()
         .and_then(|file| std::fs::read_to_string(file).ok())
         .and_then(|text| pdf_app::ocr_choice::read(&text))
-        .unwrap_or_else(Choice::fresh)
+        .unwrap_or_else(first_choice)
+}
+
+fn first_choice() -> Choice {
+    let mut choice = Choice::fresh();
+    if cfg!(target_os = "android") {
+        choice.quality = Quality::Fast;
+    }
+    choice
 }
 
 fn remember(choice: &Choice) {
@@ -73,8 +86,22 @@ pub(crate) fn draft() -> OcrDraft {
         reading: None,
         fetching: None,
         trouble: None,
+        #[cfg(target_os = "android")]
+        wanted: Vec::new(),
+        #[cfg(target_os = "android")]
+        adding: false,
+        #[cfg(target_os = "android")]
+        read_when_fetched: false,
     };
     draft.take_stock();
+    #[cfg(target_os = "android")]
+    {
+        draft.wanted = if draft.choice.languages.is_empty() {
+            vec!["eng".to_owned()]
+        } else {
+            draft.choice.languages.clone()
+        };
+    }
     draft
 }
 
@@ -122,9 +149,13 @@ impl OcrDraft {
     }
 
     fn chosen(&self) -> Vec<String> {
+        #[cfg(target_os = "android")]
+        return self.wanted.clone();
+        #[cfg(not(target_os = "android"))]
         self.ticked.clone()
     }
 
+    #[cfg(not(target_os = "android"))]
     fn split(&self) -> Option<Message> {
         pdf_app::ocr_languages::one_place(&self.own, &self.system, &self.ticked)
             .err()
@@ -202,6 +233,9 @@ impl Window {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 10.0;
                             ui.label(Message::ThisPageIsAScan.say(lang));
+                            #[cfg(target_os = "android")]
+                            let label = Phone::ReadTheText.say(lang);
+                            #[cfg(not(target_os = "android"))]
                             let label = Message::Command(Command::RecognizeText).say(lang);
                             read = dialog::primary(ui, label.trim_end_matches('\u{2026}'), true)
                                 .clicked();
@@ -256,6 +290,7 @@ impl Window {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let lang = self.lang;
+        #[cfg(not(target_os = "android"))]
         let count = self.editor.page_count();
         let canvas = self.canvas;
         let pages = self.ocr_draft.as_ref().map(|draft| self.ocr_pages(draft));
@@ -263,8 +298,16 @@ impl Window {
             return;
         };
         let mut asked = Asked::default();
-        let title = Message::Command(Command::RecognizeText).say(lang);
-        let why = Message::OcrWhy.say(lang);
+        #[cfg(target_os = "android")]
+        let (title, why) = (
+            Message::Command(Command::Ocr).say(lang),
+            Phone::OcrWhy.say(lang),
+        );
+        #[cfg(not(target_os = "android"))]
+        let (title, why) = (
+            Message::Command(Command::RecognizeText).say(lang),
+            Message::OcrWhy.say(lang),
+        );
         let busy = draft.reading.is_some() || draft.fetching.is_some();
         let close = Message::Close.say(lang);
         let spec = dialog::Spec {
@@ -281,12 +324,19 @@ impl Window {
             if closed {
                 asked.pressed = Pressed::Close;
             }
+            #[cfg(target_os = "android")]
             dialog::scrolling(ui, "ocr-body", room, |ui| {
-                the_choices(ui, draft, (lang, count), &mut asked);
+                simple::panel(ui, draft, (lang, pages.as_ref(), now), &mut asked);
             });
-            what_stands_in_the_way(ui, draft, lang, pages.as_ref());
-            how_far(ui, draft, lang);
-            the_buttons(ui, draft, (lang, pages.as_ref()), &mut asked);
+            #[cfg(not(target_os = "android"))]
+            {
+                dialog::scrolling(ui, "ocr-body", room, |ui| {
+                    the_choices(ui, draft, (lang, count), &mut asked);
+                });
+                what_stands_in_the_way(ui, draft, lang, pages.as_ref());
+                how_far(ui, draft, lang);
+                the_buttons(ui, draft, (lang, pages.as_ref()), &mut asked);
+            }
         });
         if asked.pressed == Pressed::Stop {
             if let Some(reading) = draft.reading.as_ref() {
@@ -301,6 +351,10 @@ impl Window {
             draft.take_stock();
             asked.remember = true;
         }
+        #[cfg(target_os = "android")]
+        if asked.remember {
+            draft.choice.languages.clone_from(&draft.wanted);
+        }
         if asked.remember {
             remember(&draft.choice);
         }
@@ -309,6 +363,9 @@ impl Window {
             Pressed::GetModel(code) => self.fetch_model(ctx, &code),
             Pressed::RemoveModel(code) => self.remove_model(&code),
             Pressed::GetEngine => self.fetch_engine(ctx),
+            #[cfg(target_os = "android")]
+            Pressed::Read => self.read_or_fetch(ctx),
+            #[cfg(not(target_os = "android"))]
             Pressed::Read => self.start_reading(ctx),
             Pressed::Nothing | Pressed::Stop => {}
         }
@@ -440,11 +497,36 @@ impl Window {
             draft.engine = engine;
         }
         draft.take_stock();
+        #[cfg(not(target_os = "android"))]
         if let Some(code) = landed {
             draft.tick(&code, true);
             remember(&draft.choice);
         }
+        #[cfg(target_os = "android")]
+        let _ = landed;
         ctx.request_repaint();
+        #[cfg(target_os = "android")]
+        if std::mem::take(&mut draft.read_when_fetched) && draft.trouble.is_none() {
+            self.read_or_fetch(ctx);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn read_or_fetch(&mut self, ctx: &egui::Context) {
+        let Some(draft) = self.ocr_draft.as_mut() else {
+            return;
+        };
+        let missing = draft
+            .chosen()
+            .into_iter()
+            .find(|code| !draft.here.contains(code));
+        match missing {
+            Some(code) => {
+                draft.read_when_fetched = true;
+                self.fetch_model(ctx, &code);
+            }
+            None => self.start_reading(ctx),
+        }
     }
 
     fn start_reading(&mut self, ctx: &egui::Context) {
@@ -1074,6 +1156,9 @@ fn blocked(
     if draft.chosen().is_empty() {
         return Some((dialog::Tone::Warning, Message::OcrNoLanguage));
     }
+    #[cfg(target_os = "android")]
+    return None;
+    #[cfg(not(target_os = "android"))]
     draft.split().map(|split| (dialog::Tone::Warning, split))
 }
 

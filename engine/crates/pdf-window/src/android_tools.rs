@@ -42,6 +42,8 @@ const PDF: &[&str] = &["application/pdf"];
 
 pub(crate) const PICTURES: &[&str] = &["image/jpeg", "image/png"];
 
+pub(crate) const FOR_THE_CHAT: &[&str] = &["image/jpeg", "image/png", "application/pdf"];
+
 pub(crate) const FOR_THE_WINDOW: &str = "window:";
 const BLUE: [u8; 3] = [37, 99, 235];
 const GREEN: [u8; 3] = [22, 163, 74];
@@ -350,6 +352,11 @@ impl Window {
             "pictures-before" => self.pictures_chosen(files, Some(true)),
             "pictures-after" => self.pictures_chosen(files, Some(false)),
             "pictures-new" => self.pictures_chosen(files, None),
+            "chat-attachment" => {
+                for path in files {
+                    self.ai.attach_file(path);
+                }
+            }
             _ => {}
         }
     }

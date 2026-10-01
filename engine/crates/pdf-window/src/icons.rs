@@ -1306,6 +1306,6 @@ mod tests {
                 assert_ne!(icon, other, "two of the same icon");
             }
         }
-        assert_eq!(every.len(), 75);
+        assert_eq!(every.len(), 79);
     }
 }

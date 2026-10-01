@@ -2902,4 +2902,65 @@ mod finger_tests {
         assert!(phone.window.fling.is_some(), "still going");
         assert!(phone.window.offset.y > 5.0, "{:?}", phone.window.offset);
     }
+    #[test]
+    fn on_a_phone_the_assistant_covers_the_page_edge_to_edge_and_gives_it_back_when_put_away() {
+        let mut phone = Phone::new();
+        phone.window.touched = true;
+        phone.window.ai.open = true;
+        for _ in 0..4 {
+            phone.frame(Vec::new());
+        }
+        assert!(phone.window.ai_covers_the_page(&phone.ctx));
+        let sheet = phone.window.ai_panel_shape.expect("the sheet is on screen");
+        assert!(
+            sheet.width() >= SCREEN.x - 20.0,
+            "the sheet takes the width of the screen: {sheet:?}"
+        );
+        phone.window.put_the_assistant_away(&phone.ctx.clone());
+        for _ in 0..4 {
+            phone.frame(Vec::new());
+        }
+        assert!(!phone.window.ai_covers_the_page(&phone.ctx));
+        assert!(
+            phone.window.ai_panel_shape.is_none(),
+            "nothing is left over"
+        );
+        assert!(
+            phone.window.view.x >= SCREEN.x - 20.0,
+            "the page has the whole width again: {:?}",
+            phone.window.view
+        );
+    }
+
+    #[test]
+    fn a_wide_screen_keeps_the_assistant_beside_the_page_even_when_touched() {
+        let mut phone = Phone::new();
+        phone.window.touched = true;
+        phone.window.ai.open = true;
+        let wide = egui::vec2(900.0, 700.0);
+        for step in 0..4 {
+            phone.time += STEP;
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, wide)),
+                time: Some(phone.time),
+                predicted_dt: 1.0 / 60.0,
+                events: Vec::new(),
+                ..Default::default()
+            };
+            let mut frame = eframe::Frame::_new_kittest();
+            let window = &mut phone.window;
+            let _ = phone
+                .ctx
+                .run_ui(input, |ui| eframe::App::ui(window, ui, &mut frame));
+            let _ = step;
+        }
+        assert!(!phone.window.ai_covers_the_page(&phone.ctx));
+        let panel = phone.window.ai_panel_shape.expect("the panel is on screen");
+        assert!(panel.width() < wide.x / 2.0, "{panel:?}");
+        assert!(
+            phone.window.view.x > wide.x / 3.0,
+            "{:?}",
+            phone.window.view
+        );
+    }
 }

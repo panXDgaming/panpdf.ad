@@ -166,7 +166,7 @@ impl Window {
 
     #[cfg(target_os = "android")]
     fn pick_on_the_phone(&mut self) -> bool {
-        use crate::android_tools::{FOR_THE_WINDOW, PICTURES};
+        use crate::android_tools::{FOR_THE_CHAT, FOR_THE_WINDOW, PICTURES};
         use crate::page_actions::Choosing;
         let (accepts, several, what): (&[&str], bool, &str) = match self.choosing_for {
             Choosing::Open => {
@@ -175,6 +175,7 @@ impl Window {
                 return true;
             }
             Choosing::Picture => (PICTURES, true, "place-picture"),
+            Choosing::ChatAttachment => (FOR_THE_CHAT, true, "chat-attachment"),
             Choosing::Pages { before: true } => (&["application/pdf"], false, "pages-before"),
             Choosing::Pages { before: false } => (&["application/pdf"], false, "pages-after"),
             _ => return false,

@@ -250,6 +250,12 @@ pub(crate) struct OcrDraft {
     pub(crate) reading: Option<OcrReading>,
     pub(crate) fetching: Option<OcrFetch>,
     pub(crate) trouble: Option<pdf_app::wording::Message>,
+    #[cfg(target_os = "android")]
+    pub(crate) wanted: Vec<String>,
+    #[cfg(target_os = "android")]
+    pub(crate) adding: bool,
+    #[cfg(target_os = "android")]
+    pub(crate) read_when_fetched: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
