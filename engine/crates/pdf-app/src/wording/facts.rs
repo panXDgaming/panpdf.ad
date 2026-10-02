@@ -5,6 +5,7 @@ pub enum Fact {
     Properties,
     General,
     Details,
+    ReadingTheFile,
     Security,
     Title,
     Author,
@@ -98,9 +99,11 @@ pub enum Fact {
 impl Fact {
     #[must_use]
     pub fn say(&self, lang: Lang) -> String {
-        match lang {
-            Lang::English => self.english(),
-        }
+        super::for_this_device({
+            match lang {
+                Lang::English => self.english(),
+            }
+        })
     }
 
     #[expect(
@@ -112,6 +115,7 @@ impl Fact {
             Self::Properties => "Document properties".to_owned(),
             Self::General => "General".to_owned(),
             Self::Details => "Details".to_owned(),
+            Self::ReadingTheFile => "Reading the file\u{2026}".to_owned(),
             Self::Security => "Security".to_owned(),
             Self::Title => "Title".to_owned(),
             Self::Author => "Author".to_owned(),

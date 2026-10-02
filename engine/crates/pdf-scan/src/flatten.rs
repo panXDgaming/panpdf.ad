@@ -68,6 +68,11 @@ pub fn flatten(picture: &Rgba, corners: &Corners, size: (usize, usize)) -> Rgba 
     }
 }
 
+fn nearest(v: f64) -> f64 {
+    let floor = v.floor();
+    if v - floor >= 0.5 { floor + 1.0 } else { floor }
+}
+
 fn sample(picture: &Rgba, x: f64, y: f64) -> [u8; 4] {
     #[allow(clippy::cast_precision_loss)]
     let (right, bottom) = ((picture.width - 1) as f64, (picture.height - 1) as f64);
@@ -88,7 +93,7 @@ fn sample(picture: &Rgba, x: f64, y: f64) -> [u8; 4] {
         let low = at(x0, y1, c) * (1.0 - fx) + at(x1, y1, c) * fx;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         {
-            *value = (top * (1.0 - fy) + low * fy).round().clamp(0.0, 255.0) as u8;
+            *value = nearest(top * (1.0 - fy) + low * fy).clamp(0.0, 255.0) as u8;
         }
     }
     out
@@ -138,7 +143,7 @@ pub fn clean(page: &Rgba) -> Rgba {
         let ratio = f64::from(ink) / f64::from(around.max(1));
         let value = ((ratio - 0.55) / (0.92 - 0.55)).clamp(0.0, 1.0) * 255.0;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let v = value.round() as u8;
+        let v = nearest(value) as u8;
         pixels.extend_from_slice(&[v, v, v, 255]);
     }
     Rgba {
@@ -152,37 +157,107 @@ pub fn clean(page: &Rgba) -> Rgba {
 pub fn enhance(page: &Rgba) -> Rgba {
     let (w, h) = (page.width, page.height);
     let lights = paper_light_rgb(page);
-    let evened: Vec<Vec<f32>> = (0..3)
-        .map(|c| {
-            page.pixels
-                .iter()
-                .skip(c)
-                .step_by(4)
-                .zip(&lights[c].pixels)
-                .map(|(&v, &p)| (f32::from(v) / f32::from(p.max(24)) * PAPER_WHITE).min(255.0))
-                .collect()
-        })
-        .collect();
-    let light: Vec<f32> = (0..w * h)
-        .map(|i| 0.299 * evened[0][i] + 0.587 * evened[1][i] + 0.114 * evened[2][i])
+    let even = |v: u8, p: u8| (f32::from(v) / f32::from(p.max(24)) * PAPER_WHITE).min(255.0);
+    let mut evened = [
+        vec![0.0_f32; w * h],
+        vec![0.0_f32; w * h],
+        vec![0.0_f32; w * h],
+    ];
+    let [red, green, blue] = &mut evened;
+    let [lr, lg, lb] = &lights;
+    let paper = lr.pixels.iter().zip(&lg.pixels).zip(&lb.pixels);
+    for ((((pixel, r), g), b), ((pr, pg), pb)) in page
+        .pixels
+        .chunks_exact(4)
+        .zip(red.iter_mut())
+        .zip(green.iter_mut())
+        .zip(blue.iter_mut())
+        .zip(paper)
+    {
+        *r = even(pixel[0], *pr);
+        *g = even(pixel[1], *pg);
+        *b = even(pixel[2], *pb);
+    }
+    let [red, green, blue] = &evened;
+    let light: Vec<f32> = red
+        .iter()
+        .zip(green)
+        .zip(blue)
+        .map(|((r, g), b)| 0.299 * r + 0.587 * g + 0.114 * b)
         .collect();
     let soft = box_blur_f32(&light, w, h, 1);
-    let mut pixels = Vec::with_capacity(w * h * 4);
-    for i in 0..w * h {
-        let lift = SHARPEN * (light[i] - soft[i]);
-        for channel in &evened {
-            let v = channel[i] + lift;
-            let x = (v / PAPER_WHITE).clamp(0.0, 1.0);
-            let curved = PAPER_WHITE * x.powf(INK_CURVE);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            pixels.push(curved.round().clamp(0.0, 255.0) as u8);
+    let levels = InkLevels::new();
+    let mut pixels = vec![255_u8; w * h * 4];
+    let sharpened = light.iter().zip(&soft).zip(red).zip(green).zip(blue);
+    for (out, ((((l, s), r), g), b)) in pixels.chunks_exact_mut(4).zip(sharpened) {
+        let lift = SHARPEN * (l - s);
+        for (o, v) in out.iter_mut().zip([r, g, b]) {
+            *o = levels.of(((v + lift) / PAPER_WHITE).clamp(0.0, 1.0));
         }
-        pixels.push(255);
     }
     Rgba {
         width: w,
         height: h,
         pixels,
+    }
+}
+
+fn ink_curve(x: f32) -> u8 {
+    let curved = PAPER_WHITE * x.powf(INK_CURVE);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let level = curved.round().clamp(0.0, 255.0) as u8;
+    level
+}
+
+struct InkLevels {
+    starts: Vec<f32>,
+    bucket: Vec<u8>,
+}
+
+impl InkLevels {
+    const BUCKETS: usize = 4096;
+
+    fn new() -> Self {
+        let top = ink_curve(1.0);
+        let starts: Vec<f32> = (1..=top)
+            .map(|level| {
+                let (mut low, mut high) = (0_u32, 1.0_f32.to_bits());
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    if ink_curve(f32::from_bits(middle)) >= level {
+                        high = middle;
+                    } else {
+                        low = middle + 1;
+                    }
+                }
+                f32::from_bits(low)
+            })
+            .collect();
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let bucket = (0..=Self::BUCKETS)
+            .map(|b| {
+                let from = b as f32 / Self::BUCKETS as f32;
+                starts.partition_point(|&t| t <= from) as u8
+            })
+            .collect();
+        Self { starts, bucket }
+    }
+
+    fn of(&self, x: f32) -> u8 {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let b = ((x * Self::BUCKETS as f32) as usize).min(Self::BUCKETS);
+        let mut level = self.bucket[b];
+        while let Some(&start) = self.starts.get(usize::from(level)) {
+            if start > x {
+                break;
+            }
+            level += 1;
+        }
+        level
     }
 }
 
@@ -217,21 +292,26 @@ fn laid_over(smooth: &Grey, w: usize, h: usize) -> Grey {
     let (sw, sh) = (smooth.width, smooth.height);
     let mut pixels = Vec::with_capacity(w * h);
     #[allow(clippy::cast_precision_loss)]
+    let columns: Vec<(usize, usize, f32)> = (0..w)
+        .map(|x| {
+            let fx = ((x as f32 + 0.5) / PAPER_STEP as f32 - 0.5).clamp(0.0, (sw - 1) as f32);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (x0, tx) = (fx.floor() as usize, fx.fract());
+            (x0, (x0 + 1).min(sw - 1), tx)
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
     for y in 0..h {
         let fy = ((y as f32 + 0.5) / PAPER_STEP as f32 - 0.5).clamp(0.0, (sh - 1) as f32);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let (y0, ty) = (fy.floor() as usize, fy.fract());
         let y1 = (y0 + 1).min(sh - 1);
-        for x in 0..w {
-            let fx = ((x as f32 + 0.5) / PAPER_STEP as f32 - 0.5).clamp(0.0, (sw - 1) as f32);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let (x0, tx) = (fx.floor() as usize, fx.fract());
-            let x1 = (x0 + 1).min(sw - 1);
+        for &(x0, x1, tx) in &columns {
             let at = |x: usize, y: usize| f32::from(smooth.pixels[y * sw + x]);
             let top = at(x0, y0) * (1.0 - tx) + at(x1, y0) * tx;
             let low = at(x0, y1) * (1.0 - tx) + at(x1, y1) * tx;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            pixels.push((top * (1.0 - ty) + low * ty).round() as u8);
+            pixels.push(nearest(f64::from(top * (1.0 - ty) + low * ty)) as u8);
         }
     }
     Grey {
@@ -360,26 +440,53 @@ fn lightest_colour(
 }
 
 fn box_blur_f32(values: &[f32], w: usize, h: usize, radius: usize) -> Vec<f32> {
-    let pass = |source: &[f32], across: bool| -> Vec<f32> {
-        let mut out = vec![0.0_f32; source.len()];
-        let (lines, length) = if across { (h, w) } else { (w, h) };
-        let mut prefix = vec![0.0_f64; length + 1];
-        for line in 0..lines {
-            let at = |i: usize| if across { line * w + i } else { i * w + line };
-            for i in 0..length {
-                prefix[i + 1] = prefix[i] + f64::from(source[at(i)]);
+    const BAND: usize = 64;
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let mut across = vec![0.0_f32; values.len()];
+    let mut prefix = vec![0.0_f64; w + 1];
+    for (row, out) in values.chunks_exact(w).zip(across.chunks_exact_mut(w)) {
+        for (i, &v) in row.iter().enumerate() {
+            prefix[i + 1] = prefix[i] + f64::from(v);
+        }
+        for (i, o) in out.iter_mut().enumerate() {
+            let (from, to) = (i.saturating_sub(radius), (i + radius).min(w - 1));
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            {
+                *o = ((prefix[to + 1] - prefix[from]) / (to - from + 1) as f64) as f32;
             }
-            for i in 0..length {
-                let (from, to) = (i.saturating_sub(radius), (i + radius).min(length - 1));
-                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        }
+    }
+    let mut out = vec![0.0_f32; values.len()];
+    let mut sums = vec![0.0_f64; (h + 1) * BAND];
+    for first in (0..w).step_by(BAND) {
+        let band = BAND.min(w - first);
+        for y in 0..h {
+            let row = &across[y * w + first..y * w + first + band];
+            let (before, now) = sums.split_at_mut((y + 1) * BAND);
+            let before = &before[y * BAND..];
+            for ((sum, &earlier), &v) in now[..band].iter_mut().zip(before).zip(row) {
+                *sum = earlier + f64::from(v);
+            }
+        }
+        for y in 0..h {
+            let (from, to) = (y.saturating_sub(radius), (y + radius).min(h - 1));
+            #[allow(clippy::cast_precision_loss)]
+            let count = (to - from + 1) as f64;
+            let (low, high) = (&sums[from * BAND..], &sums[(to + 1) * BAND..]);
+            for (x, o) in out[y * w + first..y * w + first + band]
+                .iter_mut()
+                .enumerate()
+            {
+                #[allow(clippy::cast_possible_truncation)]
                 {
-                    out[at(i)] = ((prefix[to + 1] - prefix[from]) / (to - from + 1) as f64) as f32;
+                    *o = ((high[x] - low[x]) / count) as f32;
                 }
             }
         }
-        out
-    };
-    pass(&pass(values, true), false)
+    }
+    out
 }
 
 fn lightest(picture: &Grey, radius: usize) -> Grey {
@@ -540,5 +647,78 @@ mod tests {
             let (r, g, b) = at(x + 4, 405);
             assert!(r < 80 && g < 80 && b < 80, "text at {x}: {r} {g} {b}");
         }
+    }
+
+    #[test]
+    fn the_level_table_gives_what_the_power_gives() {
+        let levels = InkLevels::new();
+        let edges = levels
+            .starts
+            .iter()
+            .flat_map(|t| [f32::from_bits(t.to_bits() - 1), *t]);
+        let spread = (0..=1.0_f32.to_bits()).step_by(1021).map(f32::from_bits);
+        for x in edges.chain(spread).chain([0.0, -0.0, 1.0]) {
+            assert_eq!(levels.of(x), ink_curve(x), "at {x}");
+        }
+        let mut wrong = InkLevels::new();
+        wrong.starts[100] = f32::from_bits(wrong.starts[100].to_bits() + 1);
+        let x = levels.starts[100];
+        assert_ne!(wrong.of(x), ink_curve(x));
+    }
+
+    #[test]
+    fn the_blur_down_bands_of_columns_adds_as_one_column_at_a_time() {
+        let plain = |values: &[f32], w: usize, h: usize, radius: usize| {
+            let pass = |source: &[f32], across: bool| -> Vec<f32> {
+                let mut out = vec![0.0_f32; source.len()];
+                let (lines, length) = if across { (h, w) } else { (w, h) };
+                let mut prefix = vec![0.0_f64; length + 1];
+                for line in 0..lines {
+                    let at = |i: usize| if across { line * w + i } else { i * w + line };
+                    for i in 0..length {
+                        prefix[i + 1] = prefix[i] + f64::from(source[at(i)]);
+                    }
+                    for i in 0..length {
+                        let (from, to) = (i.saturating_sub(radius), (i + radius).min(length - 1));
+                        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                        {
+                            out[at(i)] =
+                                ((prefix[to + 1] - prefix[from]) / (to - from + 1) as f64) as f32;
+                        }
+                    }
+                }
+                out
+            };
+            pass(&pass(values, true), false)
+        };
+        for (w, h, radius) in [(150, 41, 1), (150, 41, 7), (3, 90, 2), (1, 1, 1)] {
+            #[allow(clippy::cast_precision_loss)]
+            let values: Vec<f32> = (0..w * h)
+                .map(|i| ((i * 7919) % 257) as f32 * 0.37 + 0.001 * i as f32)
+                .collect();
+            let (want, got) = (
+                plain(&values, w, h, radius),
+                box_blur_f32(&values, w, h, radius),
+            );
+            assert!(
+                want.iter()
+                    .zip(&got)
+                    .all(|(a, b)| a.to_bits() == b.to_bits()),
+                "{w} x {h}, radius {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn nearest_ends_as_the_same_byte_as_round() {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let byte = |v: f64| v.clamp(0.0, 255.0) as u8;
+        let halves = (-4..=520).map(|i| f64::from(i) / 2.0);
+        let near_halves = halves.clone().flat_map(|h| [h.next_down(), h.next_up()]);
+        let spread = (0..200_000).map(|i| f64::from(i) * 0.001_3 - 3.0);
+        for v in halves.chain(near_halves).chain(spread) {
+            assert_eq!(byte(nearest(v)), byte(v.round()), "at {v}");
+        }
+        assert_ne!(byte(2.5_f64.round_ties_even()), byte(nearest(2.5)));
     }
 }

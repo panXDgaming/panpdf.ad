@@ -18,6 +18,7 @@ mod chooser;
 mod chrome;
 mod clipboard;
 mod contents;
+mod dialog;
 mod draw_pen;
 mod draw_shape;
 mod drawing_speed;
@@ -37,6 +38,7 @@ mod link_tool;
 mod live_typing;
 #[cfg(not(target_arch = "wasm32"))]
 mod memory;
+mod menus;
 mod meter;
 mod moment;
 mod naming;
@@ -55,14 +57,28 @@ mod properties;
 mod reporting;
 mod room;
 pub mod save_file;
+mod shortcuts;
 mod side_panel;
 mod stamp_tool;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod startup;
+mod status_line;
 mod system_dialog;
 mod take_out;
 mod task;
 mod text;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_marks;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_page;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_room;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_run;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_screens;
+#[cfg(not(target_arch = "wasm32"))]
+mod tools_settings;
 mod touch;
 mod trace;
 mod unlock;

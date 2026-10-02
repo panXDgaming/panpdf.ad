@@ -1,3 +1,4 @@
+pub mod autonyms;
 mod catalogue;
 pub mod models;
 pub mod names;
@@ -57,7 +58,9 @@ pub fn page_image(
         height: canvas.height,
         pixels: canvas
             .to_rgb8()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|pixel| {
                 let sum = 299 * u32::from(pixel[0])
                     + 587 * u32::from(pixel[1])

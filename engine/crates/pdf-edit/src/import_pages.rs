@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn pages_go_in_from_a_document_whose_header_a_strict_read_refuses() {
         let other: Arc<[u8]> = Arc::from(document_headed(
-            b"%PDF-1.3 \n",
+            b"%PDF-1.3 x\n",
             &[
                 "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
                 "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),

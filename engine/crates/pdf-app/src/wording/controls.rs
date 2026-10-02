@@ -15,9 +15,11 @@ pub enum Control {
 impl Control {
     #[must_use]
     pub fn say(&self, lang: Lang) -> String {
-        match lang {
-            Lang::English => self.english(),
-        }
+        super::for_this_device({
+            match lang {
+                Lang::English => self.english(),
+            }
+        })
     }
 
     fn english(&self) -> String {

@@ -23,6 +23,18 @@ Free &middot; open source &middot; no account &middot; Android 8 or newer
 Not on Google Play yet. Rather not install? Use it in the browser at
 [panpdf.org](https://panpdf.org).
 
+### On a computer
+
+One command, no administrator rights:
+
+```powershell
+irm https://panpdf.org/install.ps1 | iex          # Windows, in PowerShell
+```
+
+```sh
+curl -fsSL https://panpdf.org/install.sh | sh     # Linux and macOS
+```
+
 ## Build it yourself
 
 Needs Rust (pinned in `engine/rust-toolchain.toml`) with the

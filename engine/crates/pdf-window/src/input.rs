@@ -328,7 +328,7 @@ impl Window {
         self.choose(page, blocks, objects);
     }
 
-    fn clicked_at(&self, page: usize, point: (f64, f64), extend: bool) -> Pointing {
+    pub(crate) fn clicked_at(&self, page: usize, point: (f64, f64), extend: bool) -> Pointing {
         let Some(overlay) = self.overlay(page) else {
             return Pointing::Nothing;
         };
@@ -1425,6 +1425,7 @@ impl Window {
         self.pump();
         if ctx.input(|input| input.key_pressed(egui::Key::F2)) {
             self.show_frames = !self.show_frames;
+            self.remember_the_view();
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.open_the_find_bar();
@@ -1528,6 +1529,17 @@ impl Window {
         }
         if self.text_draft.is_some() {
             self.drop_the_text_draft();
+            return;
+        }
+        if self
+            .ocr_draft
+            .as_ref()
+            .is_some_and(|draft| draft.reading.is_none() && draft.fetching.is_none())
+        {
+            self.ocr_draft = None;
+            return;
+        }
+        if self.stamp_draft.take().is_some() {
             return;
         }
         if self.tool != Tool::Select {

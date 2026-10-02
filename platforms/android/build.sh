@@ -21,6 +21,10 @@ case $which in
     *) echo "usage: $0 [all|arm64|x86_64]" >&2; exit 2 ;;
 esac
 
+if [[ -f $root/engine/sync-converters.py ]]; then
+    python3 "$root/engine/sync-converters.py"
+fi
+
 for target in "${targets[@]}"; do
     [[ ${PACKAGE_ONLY-} ]] && break
     upper=$(echo "$target" | tr 'a-z-' 'A-Z_')

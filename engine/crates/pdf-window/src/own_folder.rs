@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use pdf_app::own_files::{self, Platform};
+use pdf_app::own_files;
 
 pub(crate) struct Places {
     pub(crate) appdata: Option<PathBuf>,
@@ -35,9 +35,12 @@ impl Places {
     )
 )]
 pub(crate) fn folder() -> Option<PathBuf> {
-    own_files::folder(Platform::running(), &Places::read().env())
+    #[cfg(target_os = "android")]
+    return crate::android::files_dir().map(|files| files.join("panpdf"));
+    #[cfg(not(target_os = "android"))]
+    own_files::folder(own_files::Platform::running(), &Places::read().env())
 }
 
 pub(crate) fn own_file(name: &str) -> Option<PathBuf> {
-    own_files::file(Platform::running(), &Places::read().env(), name)
+    folder().map(|folder| folder.join(name))
 }

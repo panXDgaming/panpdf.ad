@@ -32,7 +32,9 @@ pub fn find_sheet_in_colour(picture: &crate::Rgba) -> Option<Corners> {
         height: picture.height,
         pixels: picture
             .pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|p| {
                 let high = p[0].max(p[1]).max(p[2]);
                 let low = p[0].min(p[1]).min(p[2]);

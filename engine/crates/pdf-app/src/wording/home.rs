@@ -27,6 +27,7 @@ pub enum Home {
     HomeFolder,
     NoPdfHere,
     NoPictureHere,
+    NoFileHere,
     FolderUnreadable(String),
     Cancel,
     OpenChosen,
@@ -48,9 +49,11 @@ pub enum Home {
 impl Home {
     #[must_use]
     pub fn say(&self, lang: Lang) -> String {
-        match lang {
-            Lang::English => self.english(),
-        }
+        super::for_this_device({
+            match lang {
+                Lang::English => self.english(),
+            }
+        })
     }
 
     fn english(&self) -> String {
@@ -89,6 +92,7 @@ impl Home {
             Self::HomeFolder => "Home folder".to_owned(),
             Self::NoPdfHere => "No folders or PDF files here".to_owned(),
             Self::NoPictureHere => "No folders or pictures (JPEG, PNG) here".to_owned(),
+            Self::NoFileHere => "No folders or matching files here".to_owned(),
             Self::FolderUnreadable(folder) => format!("{folder} cannot be read"),
             Self::Cancel => "Cancel".to_owned(),
             Self::OpenChosen => "Open".to_owned(),
@@ -101,8 +105,8 @@ impl Home {
             Self::PicturesToPages => "Choose the pictures to make a PDF of".to_owned(),
             Self::PicturesToInsert => "Choose the pictures to put in as pages".to_owned(),
             Self::UsePictures(0) => "Use these".to_owned(),
-            Self::UsePictures(1) => "Use this 1".to_owned(),
-            Self::UsePictures(many) => format!("Use these {many}"),
+            Self::UsePictures(1) => "Use 1 picture".to_owned(),
+            Self::UsePictures(many) => format!("Use {many} pictures"),
             Self::FileName => "File name".to_owned(),
             Self::SaveHere => "Save".to_owned(),
             Self::NameTaken => "A file of that name is already in this folder".to_owned(),
@@ -115,6 +119,14 @@ impl Home {
 mod tests {
     use super::{Home, Lang};
     use crate::recent::Ago;
+
+    #[test]
+    fn the_button_that_takes_ticked_pictures_names_what_it_takes() {
+        let said = |count| Home::UsePictures(count).say(Lang::English);
+        assert_eq!(said(0), "Use these");
+        assert_eq!(said(1), "Use 1 picture");
+        assert_eq!(said(5), "Use 5 pictures");
+    }
 
     #[test]
     fn ages_are_counted_in_english_and_thai() {

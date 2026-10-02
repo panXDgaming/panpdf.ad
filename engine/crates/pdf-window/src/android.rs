@@ -112,6 +112,10 @@ pub(crate) fn tools_program() -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
+pub(crate) fn files_dir() -> Option<PathBuf> {
+    FILES.get().cloned()
+}
+
 pub(crate) fn fonts_dir() -> Option<PathBuf> {
     FILES.get().map(|folder| folder.join("fonts"))
 }
@@ -370,7 +374,7 @@ impl Window {
             .map_or(0, |since| since.as_secs());
         let day = pdf_app::dates::moment(stamp);
         let base = format!("Scan {}-{:02}-{:02}", day.year, day.month, day.day);
-        let path = (1..)
+        let path = (1..1000_u32)
             .map(|n| {
                 folder.join(if n == 1 {
                     format!("{base}.pdf")
@@ -384,6 +388,14 @@ impl Window {
     }
 
     fn back(&mut self) {
+        if self.ai.open {
+            let ctx = CONTEXT.get().cloned();
+            if let Some(ctx) = ctx {
+                self.put_the_assistant_away(&ctx);
+                wake();
+                return;
+            }
+        }
         let chosen = self.reading.is_some()
             || self.picture_menu.is_some()
             || !matches!(self.pointing, crate::window_state::Pointing::Nothing);
@@ -437,10 +449,11 @@ impl Window {
         for link in links {
             let _ = open_url(&link);
         }
-        let typing = self.touched
+        let typing = (self.touched
             && !self.viewing
             && (matches!(self.pointing, crate::window_state::Pointing::Text { .. })
-                || self.text_draft.is_some());
+                || self.text_draft.is_some()))
+            || ctx.egui_wants_keyboard_input();
         if KEYBOARD.swap(typing, Ordering::Relaxed) != typing {
             (host.keyboard)(typing);
         }
@@ -463,6 +476,9 @@ impl Window {
 
     fn text_menu_wanted(&self, ctx: &egui::Context) -> Option<([i32; 4], bool)> {
         if ctx.input(|input| input.pointer.any_down()) || self.carrying_an_end {
+            return None;
+        }
+        if self.ai.open || ctx.egui_wants_keyboard_input() {
             return None;
         }
         let ppp = ctx.pixels_per_point();

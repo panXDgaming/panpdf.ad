@@ -122,7 +122,9 @@ fn read_ppm(path: &Path) -> Rgba {
     at += 1;
     let (width, height): (usize, usize) = (fields[1].parse().unwrap(), fields[2].parse().unwrap());
     let pixels = bytes[at..at + width * height * 3]
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .flat_map(|p| [p[0], p[1], p[2], 255])
         .collect();
     Rgba {
@@ -140,7 +142,7 @@ fn write_pgm(path: &Path, grey: &Grey) {
 
 fn write_ppm(path: &Path, picture: &Rgba) {
     let mut out = format!("P6\n{} {}\n255\n", picture.width, picture.height).into_bytes();
-    for p in picture.pixels.chunks_exact(4) {
+    for p in picture.pixels.as_chunks::<4>().0 {
         out.extend_from_slice(&p[..3]);
     }
     std::fs::write(path, out).expect("written");

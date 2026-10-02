@@ -135,8 +135,10 @@ impl Reader<'_> {
     fn halves(&mut self, n: usize) -> Option<Vec<f32>> {
         Some(
             self.take(n * 2)?
-                .chunks_exact(2)
-                .map(|b| half_to_f32(u16::from_le_bytes([b[0], b[1]])))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| half_to_f32(u16::from_le_bytes(*b)))
                 .collect(),
         )
     }
@@ -508,7 +510,11 @@ struct Shape {
     groups: usize,
 }
 
-#[allow(clippy::many_single_char_names)]
+#[allow(
+    clippy::many_single_char_names,
+    clippy::too_many_lines,
+    reason = "one kernel's three ways of walking the same sums, kept side by side"
+)]
 fn conv(input: &Tensor, shape: Shape, weights: &[f32], bias: &[f32]) -> Option<Tensor> {
     let Shape {
         out_c,
@@ -538,9 +544,9 @@ fn conv(input: &Tensor, shape: Shape, weights: &[f32], bias: &[f32]) -> Option<T
                 let (w0, w1, w2, w3) = (w[c], w[c + 1], w[c + 2], w[c + 3]);
                 let at =
                     |k: usize| &input.data[(first + c + k) * plane..(first + c + k + 1) * plane];
-                let (a, b, cc, d) = (at(0), at(1), at(2), at(3));
-                for (i, v) in out.iter_mut().enumerate() {
-                    *v += w0 * a[i] + w1 * b[i] + w2 * cc[i] + w3 * d[i];
+                let four = at(0).iter().zip(at(1)).zip(at(2)).zip(at(3));
+                for (v, (((a, b), cc), d)) in out.iter_mut().zip(four) {
+                    *v += w0 * a + w1 * b + w2 * cc + w3 * d;
                 }
                 c += 4;
             }
@@ -584,21 +590,88 @@ fn conv(input: &Tensor, shape: Shape, weights: &[f32], bias: &[f32]) -> Option<T
             }
         }
     };
+    let four_channels = |o: usize, outs: &mut [f32]| {
+        let (o0, rest) = outs.split_at_mut(plane);
+        let (o1, rest) = rest.split_at_mut(plane);
+        let (o2, o3) = rest.split_at_mut(plane);
+        for (k, out) in [&mut *o0, &mut *o1, &mut *o2, &mut *o3]
+            .into_iter()
+            .enumerate()
+        {
+            out.fill(bias[o + k]);
+        }
+        let size = in_per_group * kernel * kernel;
+        let w = |k: usize| &weights[(o + k) * size..(o + k + 1) * size];
+        let (wa, wb, wc, wd) = (w(0), w(1), w(2), w(3));
+        for c in 0..in_per_group {
+            let src = &input.data[c * input.plane()..(c + 1) * input.plane()];
+            for ky in 0..kernel {
+                for kx in 0..kernel {
+                    let at = (c * kernel + ky) * kernel + kx;
+                    let (w0, w1, w2, w3) = (wa[at], wb[at], wc[at], wd[at]);
+                    let first = pad.saturating_sub(kx);
+                    let last = ((input.w + pad).saturating_sub(kx + 1) + 1).min(ow);
+                    if first >= last {
+                        continue;
+                    }
+                    let from = first + kx - pad;
+                    for y in 0..oh {
+                        let Some(iy) = (y + ky).checked_sub(pad).filter(|&iy| iy < input.h) else {
+                            continue;
+                        };
+                        let row = &src[iy * input.w + from..iy * input.w + from + (last - first)];
+                        let span = y * ow + first..y * ow + last;
+                        let four = o0[span.clone()]
+                            .iter_mut()
+                            .zip(&mut o1[span.clone()])
+                            .zip(&mut o2[span.clone()])
+                            .zip(&mut o3[span]);
+                        for ((((a, b), cc), d), s) in four.zip(row) {
+                            *a += w0 * s;
+                            *b += w1 * s;
+                            *cc += w2 * s;
+                            *d += w3 * s;
+                        }
+                    }
+                }
+            }
+        }
+    };
+    let blocked = groups == 1 && stride == 1 && kernel > 1;
+    let three = blocked && kernel == 3 && pad == 1 && oh == input.h && ow == input.w;
+    let channels = |o: usize, part: &mut [f32]| {
+        let mut done = 0;
+        if blocked {
+            for outs in part.chunks_exact_mut(4 * plane) {
+                if three {
+                    let size = in_per_group * 9;
+                    let w = |k: usize| &weights[(o + done + k) * size..(o + done + k + 1) * size];
+                    let b = |k: usize| bias[o + done + k];
+                    three_by_three(
+                        input,
+                        [w(0), w(1), w(2), w(3)],
+                        [b(0), b(1), b(2), b(3)],
+                        outs,
+                    );
+                } else {
+                    four_channels(o + done, outs);
+                }
+                done += 4;
+            }
+        }
+        for (i, out) in part[done * plane..].chunks_mut(plane).enumerate() {
+            one_channel(o + done + i, out);
+        }
+    };
     let threads = cores().min(out_c).max(1);
     if threads == 1 || out_c * plane * in_per_group * kernel * kernel < 1 << 18 {
-        for (o, out) in data.chunks_mut(plane).enumerate() {
-            one_channel(o, out);
-        }
+        channels(0, &mut data);
     } else {
-        let per_thread = out_c.div_ceil(threads);
+        let per_thread = out_c.div_ceil(threads).next_multiple_of(4);
         std::thread::scope(|scope| {
             for (t, part) in data.chunks_mut(per_thread * plane).enumerate() {
-                let one_channel = &one_channel;
-                scope.spawn(move || {
-                    for (i, out) in part.chunks_mut(plane).enumerate() {
-                        one_channel(t * per_thread + i, out);
-                    }
-                });
+                let channels = &channels;
+                scope.spawn(move || channels(t * per_thread, part));
             }
         });
     }
@@ -608,6 +681,76 @@ fn conv(input: &Tensor, shape: Shape, weights: &[f32], bias: &[f32]) -> Option<T
         w: ow,
         data,
     })
+}
+
+fn three_by_three(input: &Tensor, weights: [&[f32]; 4], bias: [f32; 4], outs: &mut [f32]) {
+    let (w, h) = (input.w, input.h);
+    let plane = w * h;
+    let (o0, rest) = outs.split_at_mut(plane);
+    let (o1, rest) = rest.split_at_mut(plane);
+    let (o2, o3) = rest.split_at_mut(plane);
+    let mut outs = [o0, o1, o2, o3];
+    for (out, b) in outs.iter_mut().zip(bias) {
+        out.fill(b);
+    }
+    for c in 0..input.c {
+        let src = &input.data[c * plane..(c + 1) * plane];
+        let taps: [[f32; 9]; 4] =
+            std::array::from_fn(|k| std::array::from_fn(|t| weights[k][c * 9 + t]));
+        for y in 0..h {
+            let row = |ky: usize| {
+                (y + ky)
+                    .checked_sub(1)
+                    .filter(|&iy| iy < h)
+                    .map(|iy| &src[iy * w..(iy + 1) * w])
+            };
+            let rows = [row(0), row(1), row(2)];
+            let line = y * w;
+            let edge = |outs: &mut [&mut [f32]; 4], x: usize| {
+                for (out, taps) in outs.iter_mut().zip(&taps) {
+                    let mut v = out[line + x];
+                    for (ky, r) in rows.iter().enumerate() {
+                        let Some(r) = r else { continue };
+                        for kx in 0..3 {
+                            if let Some(s) = (x + kx).checked_sub(1).and_then(|ix| r.get(ix)) {
+                                v += taps[ky * 3 + kx] * s;
+                            }
+                        }
+                    }
+                    out[line + x] = v;
+                }
+            };
+            let [Some(r0), Some(r1), Some(r2)] = rows else {
+                for x in 0..w {
+                    edge(&mut outs, x);
+                }
+                continue;
+            };
+            if w < 3 {
+                for x in 0..w {
+                    edge(&mut outs, x);
+                }
+                continue;
+            }
+            edge(&mut outs, 0);
+            for (out, k) in outs.iter_mut().zip(&taps) {
+                let windows = r0.windows(3).zip(r1.windows(3)).zip(r2.windows(3));
+                for (v, ((t, m), l)) in out[line + 1..line + w - 1].iter_mut().zip(windows) {
+                    *v = *v
+                        + k[0] * t[0]
+                        + k[1] * t[1]
+                        + k[2] * t[2]
+                        + k[3] * m[0]
+                        + k[4] * m[1]
+                        + k[5] * m[2]
+                        + k[6] * l[0]
+                        + k[7] * l[1]
+                        + k[8] * l[2];
+                }
+            }
+            edge(&mut outs, w - 1);
+        }
+    }
 }
 
 fn cores() -> usize {

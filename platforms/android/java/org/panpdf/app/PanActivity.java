@@ -321,6 +321,94 @@ public class PanActivity extends NativeActivity {
         }
     }
 
+    private static final java.util.concurrent.ConcurrentHashMap<Integer, java.net.HttpURLConnection> calls =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final java.util.Set<Integer> aborted = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    private static final int MOST_ANSWER = 8 * 1024 * 1024 + 1;
+
+    public static String[] http(int call, String method, String address, String[] headers, byte[] body,
+                                int idleSeconds, int capSeconds) {
+        java.net.HttpURLConnection connection = null;
+        try {
+            long deadline = System.nanoTime() + capSeconds * 1000000000L;
+            connection = (java.net.HttpURLConnection) new java.net.URL(address).openConnection();
+            calls.put(call, connection);
+            if (aborted.contains(call)) {
+                return new String[] {"cancelled", "", ""};
+            }
+            connection.setRequestMethod(method);
+            connection.setConnectTimeout(Math.min(idleSeconds, 20) * 1000);
+            connection.setReadTimeout(idleSeconds * 1000);
+            connection.setInstanceFollowRedirects(true);
+            connection.setUseCaches(false);
+            for (String header : headers) {
+                int colon = header.indexOf(':');
+                if (colon > 0) {
+                    connection.setRequestProperty(header.substring(0, colon).trim(), header.substring(colon + 1).trim());
+                }
+            }
+            if (body != null) {
+                connection.setDoOutput(true);
+                connection.setFixedLengthStreamingMode(body.length);
+                try (OutputStream out = connection.getOutputStream()) {
+                    out.write(body);
+                }
+            }
+            int status = connection.getResponseCode();
+            InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            java.io.ByteArrayOutputStream answer = new java.io.ByteArrayOutputStream();
+            if (stream != null) {
+                try (InputStream in = stream) {
+                    byte[] buffer = new byte[1 << 14];
+                    int read;
+                    while (answer.size() < MOST_ANSWER && (read = in.read(buffer)) > 0) {
+                        answer.write(buffer, 0, read);
+                        if (System.nanoTime() > deadline) {
+                            return new String[] {"timeout", "", ""};
+                        }
+                    }
+                }
+            }
+            StringBuilder fields = new StringBuilder();
+            for (java.util.Map.Entry<String, java.util.List<String>> field : connection.getHeaderFields().entrySet()) {
+                if (field.getKey() == null) {
+                    continue;
+                }
+                for (String value : field.getValue()) {
+                    fields.append(field.getKey()).append(": ").append(value).append('\n');
+                }
+            }
+            return new String[] {
+                String.valueOf(status),
+                fields.toString(),
+                new String(answer.toByteArray(), java.nio.charset.StandardCharsets.UTF_8)
+            };
+        } catch (java.net.SocketTimeoutException failure) {
+            return new String[] {aborted.contains(call) ? "cancelled" : "timeout", "", ""};
+        } catch (Exception failure) {
+            if (aborted.contains(call)) {
+                return new String[] {"cancelled", "", ""};
+            }
+            return new String[] {"error", String.valueOf(failure.getMessage()), ""};
+        } finally {
+            calls.remove(call);
+            aborted.remove(call);
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    public static void abort(int call) {
+        aborted.add(call);
+        java.net.HttpURLConnection connection = calls.get(call);
+        if (connection != null) {
+            connection.disconnect();
+        }
+    }
+
     public void shareFile(String path) {
         runOnUiThread(() -> {
             File file = new File(path);

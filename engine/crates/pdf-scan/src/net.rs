@@ -45,8 +45,10 @@ impl SheetNet {
             let inputs = word(take(4)?)?;
             let kernel = word(take(4)?)?;
             let floats = |b: &[u8]| -> Vec<f32> {
-                b.chunks_exact(4)
-                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| f32::from_le_bytes(*c))
                     .collect()
             };
             let weights = floats(take(out * inputs * kernel * kernel * 4)?);
@@ -133,7 +135,7 @@ impl Planes {
     fn of(picture: &Rgba) -> Self {
         let (w, h) = (picture.width, picture.height);
         let mut values = vec![0.0_f32; 3 * w * h];
-        for (at, p) in picture.pixels.chunks_exact(4).enumerate() {
+        for (at, p) in picture.pixels.as_chunks::<4>().0.iter().enumerate() {
             for c in 0..3 {
                 values[c * w * h + at] = f32::from(p[c]) / 255.0;
             }
