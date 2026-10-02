@@ -121,6 +121,8 @@ pub enum Message {
         searching: bool,
     },
     Close,
+    Fold,
+    Unfold,
     ReplaceAllQuestion {
         count: usize,
         pages: usize,
@@ -140,6 +142,7 @@ pub enum Message {
     AnotherEditIsRunning,
     FieldIsReadOnly,
     DragOutAField,
+    TapAField,
     DragOutALink,
     LinkGoesTo,
     LinkToAPageOfThis,
@@ -1136,6 +1139,8 @@ impl Message {
             }
             .to_owned(),
             Self::Close => "Close".to_owned(),
+            Self::Fold => "Fold away".to_owned(),
+            Self::Unfold => "Unfold".to_owned(),
             Self::ReplaceAllQuestion { count, pages } => format!(
                 "Replace {} on {}?",
                 edits::count(*count, "place"),
@@ -1161,6 +1166,7 @@ impl Message {
             Self::NoTextWasTyped => "Nothing was typed, so nothing was added".to_owned(),
             Self::AnotherEditIsRunning => "Another edit is already running".to_owned(),
             Self::FieldIsReadOnly => "This field can be read but not changed".to_owned(),
+            Self::TapAField => "Tap a field to choose it, drag it to move it. Pick a kind to add a field".to_owned(),
             Self::DragOutAField => "Click fields to choose them (Shift or Ctrl adds), drag to move, arrows nudge, Ctrl+C / Ctrl+V copy. Pick a kind above to add a field".to_owned(),
             Self::DragOutALink => "Drag out a box to make a link, or click one to change where it goes. Delete takes it off".to_owned(),
             Self::LinkGoesTo => "Goes to".to_owned(),

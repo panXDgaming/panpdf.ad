@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use eframe::egui;
 use pdf_app::wording::{Command, Message};
 
+use crate::dialog;
 use crate::web_files::OcrAnswer;
 use crate::window_state::{PageRead, Window};
 
@@ -75,131 +76,172 @@ impl Window {
             return;
         };
         let (mut read, mut stop, mut close) = (false, false, false);
-        let mut open = true;
-        crate::side_panel::side_panel(ctx, Message::Command(Command::Ocr).say(lang), "web-ocr-panel", WIDTH)
-            .open(&mut open)
-            .show(ctx, |ui| {
-                ui.set_width(crate::side_panel::box_width(ui.ctx(), WIDTH));
-                let weak = ui.visuals().weak_text_color();
-                ui.label(
-                    egui::RichText::new(
-                        "Reads scanned pages on this device with Tesseract, a small open-source model: \
-                         it can misread, so check the text. The reader and the languages you tick are \
-                         downloaded from panpdf.org and are gone when you leave the page.",
-                    )
-                    .size(11.5)
-                    .color(weak),
-                );
-                ui.separator();
-                ui.label("Languages of the text");
-                ui.horizontal_wrapped(|ui| {
-                    let mut drop = None;
-                    for code in &ocr.ticked {
-                        let name = languages
-                            .iter()
-                            .find(|(c, _, _)| c == code)
-                            .map_or(code.as_str(), |(_, n, _)| n.as_str());
-                        if ui.small_button(format!("{name}  \u{00d7}")).clicked() {
-                            drop = Some(code.clone());
-                        }
-                    }
-                    if let Some(code) = drop {
-                        ocr.ticked.retain(|c| *c != code);
-                    }
-                });
-                ui.add(
-                    egui::TextEdit::singleline(&mut ocr.search)
-                        .hint_text("Search languages")
-                        .desired_width(f32::INFINITY),
-                );
-                let words: Vec<String> = ocr
-                    .search
-                    .to_lowercase()
-                    .split_whitespace()
-                    .map(str::to_owned)
-                    .collect();
-                egui::ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
-                    if languages.is_empty() {
-                        ui.label(egui::RichText::new("The list of languages is loading\u{2026}").color(weak));
-                    }
-                    for (code, name, mb) in &languages {
-                        let haystack = format!("{} {}", name.to_lowercase(), code);
-                        if !words.iter().all(|w| haystack.contains(w.as_str())) {
-                            continue;
-                        }
-                        let mut on = ocr.ticked.contains(code);
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut on, name.as_str()).changed() {
-                                ocr.ticked.retain(|c| c != code);
-                                if on {
-                                    ocr.ticked.push(code.clone());
+        let canvas = self.canvas;
+        let title = Message::Command(Command::RecognizeText).say(lang);
+        let shut = Message::Close.say(lang);
+        let spec = crate::dialog::Spec {
+            id: "web-ocr-panel",
+            width: WIDTH,
+        };
+        crate::dialog::panel(ctx, canvas, &spec, |ui, room| {
+            close = dialog::tool_header(
+                ui,
+                title.trim_end_matches('\u{2026}'),
+                Some(
+                    "Reads scanned pages on this device. It can misread, so check the text. \
+                     The languages you tick are downloaded once, from panpdf.org.",
+                ),
+                Some(&shut),
+                lang,
+            );
+            let list = (room * 0.45).clamp(90.0, 190.0);
+            dialog::body(ui, |ui| {
+                dialog::scrolling(ui, "web-ocr-body", room, |ui| {
+                    dialog::caption(ui, "Languages of the text");
+                    if !ocr.ticked.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            let mut drop = None;
+                            for code in &ocr.ticked {
+                                let name = languages
+                                    .iter()
+                                    .find(|(c, _, _)| c == code)
+                                    .map_or(code.as_str(), |(_, n, _)| n.as_str());
+                                let chip = egui::Button::new(
+                                    egui::RichText::new(format!("{name}  \u{00d7}")).size(12.0),
+                                )
+                                .fill(ui.visuals().selection.bg_fill)
+                                .corner_radius(10);
+                                if ui.add(chip).on_hover_text("Take it off").clicked() {
+                                    drop = Some(code.clone());
                                 }
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(egui::RichText::new(format!("{mb} MB")).size(11.0).color(weak));
-                            });
+                            if let Some(code) = drop {
+                                ocr.ticked.retain(|c| *c != code);
+                            }
                         });
+                        ui.add_space(6.0);
                     }
-                });
-                let mb: f64 = languages
-                    .iter()
-                    .filter(|(code, _, _)| ocr.ticked.contains(code))
-                    .filter_map(|(_, _, mb)| mb.parse::<f64>().ok())
-                    .sum();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} ticked \u{00b7} {mb:.1} MB to download. Tick only the languages in the document: \
-                         one it does not have makes reading slower and can make it worse.",
-                        ocr.ticked.len()
-                    ))
-                    .size(11.0)
-                    .color(weak),
-                );
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut ocr.this_page, true, "This page");
-                    ui.radio_value(&mut ocr.this_page, false, "Every page");
-                });
-                if let Some(run) = &ocr.run {
-                    let said = match (&run.fetching, &run.waiting) {
-                        (Some(what), _) if what == "reader" => "Getting the reader\u{2026}".to_owned(),
-                        (Some(code), _) => format!("Getting the {code} language file\u{2026}"),
-                        (None, Some(waiting)) => format!(
-                            "Reading page {} \u{00b7} {} of {}",
-                            waiting.page + 1,
-                            run.next.min(run.pages.len()),
-                            run.pages.len()
+                    ui.add(
+                        egui::TextEdit::singleline(&mut ocr.search)
+                            .hint_text("Search languages")
+                            .desired_width(f32::INFINITY),
+                    );
+                    ui.add_space(4.0);
+                    let words: Vec<String> = ocr
+                        .search
+                        .to_lowercase()
+                        .split_whitespace()
+                        .map(str::to_owned)
+                        .collect();
+                    egui::ScrollArea::vertical()
+                        .id_salt("web-ocr-languages")
+                        .max_height(list)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if languages.is_empty() {
+                                dialog::small(ui, "The list of languages is loading\u{2026}");
+                            }
+                            let mut shown = 0;
+                            for (code, name, mb) in &languages {
+                                let haystack = format!("{} {}", name.to_lowercase(), code);
+                                if !words.iter().all(|w| haystack.contains(w.as_str())) {
+                                    continue;
+                                }
+                                shown += 1;
+                                let mut on = ocr.ticked.contains(code);
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut on, name.as_str()).changed() {
+                                        ocr.ticked.retain(|c| c != code);
+                                        if on {
+                                            ocr.ticked.push(code.clone());
+                                        }
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!("{mb} MB"))
+                                                    .size(11.0)
+                                                    .color(dialog::weak(ui)),
+                                            );
+                                        },
+                                    );
+                                });
+                            }
+                            if shown == 0 && !languages.is_empty() {
+                                dialog::small(ui, "No language matches that.");
+                            }
+                        });
+                    let mb: f64 = languages
+                        .iter()
+                        .filter(|(code, _, _)| ocr.ticked.contains(code))
+                        .filter_map(|(_, _, mb)| mb.parse::<f64>().ok())
+                        .sum();
+                    ui.add_space(4.0);
+                    dialog::small(
+                        ui,
+                        &format!(
+                            "{} ticked \u{00b7} {mb:.1} MB. Tick only the languages the document is in: \
+                         another one makes reading slower and can make it worse.",
+                            ocr.ticked.len()
                         ),
-                        (None, None) => "Looking at the pages\u{2026}".to_owned(),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(said);
-                    });
-                }
-                if let Some(why) = &ocr.trouble {
-                    ui.colored_label(ui.visuals().error_fg_color, why);
-                }
-                ui.horizontal(|ui| {
-                    if ocr.run.is_some() {
-                        stop = ui.button("Stop").clicked();
-                    } else {
-                        read = ui
-                            .add_enabled(!ocr.ticked.is_empty(), egui::Button::new("Read the text"))
-                            .clicked();
+                    );
+                    dialog::divide(ui);
+                    dialog::caption(ui, "Pages");
+                    let _ = dialog::segments(
+                        ui,
+                        "web-ocr-pages",
+                        &mut ocr.this_page,
+                        &[
+                            (true, "This page".to_owned()),
+                            (false, "Every page".to_owned()),
+                        ],
+                    );
+                    if let Some(why) = &ocr.trouble {
+                        ui.add_space(8.0);
+                        dialog::note(ui, dialog::Tone::Trouble, why);
                     }
-                    close = ui.button("Close").clicked();
                 });
             });
+            if let Some(run) = &ocr.run {
+                let said = match (&run.fetching, &run.waiting) {
+                    (Some(what), _) if what == "reader" => "Getting the reader\u{2026}".to_owned(),
+                    (Some(code), _) => format!("Getting the {code} language file\u{2026}"),
+                    (None, Some(waiting)) => format!(
+                        "Reading page {} \u{00b7} {} of {}",
+                        waiting.page + 1,
+                        run.next.min(run.pages.len()),
+                        run.pages.len()
+                    ),
+                    (None, None) => "Looking at the pages\u{2026}".to_owned(),
+                };
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    dialog::spinner(ui);
+                    ui.label(egui::RichText::new(said).size(12.0));
+                });
+            }
+            dialog::body(ui, |ui| {
+                dialog::footer(ui, |ui| {
+                    if ocr.run.is_some() {
+                        stop = dialog::primary(ui, "Stop", true).clicked();
+                    } else {
+                        read =
+                            dialog::primary(ui, "Read the text", !ocr.ticked.is_empty()).clicked();
+                    }
+                    close |= dialog::secondary(ui, &shut).clicked();
+                });
+            });
+        });
         if read {
             self.start_reading_in_the_page();
         }
-        if stop || close || !open {
+        if stop || close {
             if let Some(ocr) = self.web_ocr.as_mut() {
                 ocr.run = None;
             }
         }
-        if close || !open {
+        if close {
             self.web_ocr = None;
         }
     }

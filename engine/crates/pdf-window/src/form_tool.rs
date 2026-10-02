@@ -93,7 +93,10 @@ impl Window {
         self.ink = None;
         self.tool = Tool::Form;
         self.form_tool.kind = None;
+        #[cfg(not(target_os = "android"))]
         self.editor.say(Message::DragOutAField);
+        #[cfg(target_os = "android")]
+        self.editor.say(Message::TapAField);
     }
 
     fn chosen_boxes(&mut self) -> Option<(usize, Vec<FieldBox>)> {

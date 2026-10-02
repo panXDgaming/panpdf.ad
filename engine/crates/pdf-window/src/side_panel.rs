@@ -2,27 +2,6 @@ use eframe::egui;
 
 const START: egui::Vec2 = egui::vec2(-12.0, 56.0);
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn side_panel(
-    ctx: &egui::Context,
-    title: impl Into<egui::WidgetText>,
-    id: &str,
-    width: f32,
-) -> egui::Window<'static> {
-    let room = room_on(ctx);
-    let id = egui::Id::new(id);
-    fit_to_screen(
-        ctx,
-        id,
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
-            .default_width(width.min(room.x))
-            .pivot(egui::Align2::RIGHT_TOP)
-            .default_pos(ctx.content_rect().right_top() + START),
-    )
-}
-
 const EDGE: f32 = 8.0;
 
 fn room_on(ctx: &egui::Context) -> egui::Vec2 {
@@ -35,6 +14,13 @@ fn room_on(ctx: &egui::Context) -> egui::Vec2 {
 
 const BARS_BELOW: f32 = 110.0;
 
+#[cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        dead_code,
+        reason = "its one user, the assistant's agents window, is not built for the browser"
+    )
+)]
 pub(crate) fn fit_to_screen<'open>(
     ctx: &egui::Context,
     id: egui::Id,

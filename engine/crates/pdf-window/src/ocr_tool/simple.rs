@@ -47,9 +47,9 @@ pub(super) fn panel(
         egui::RichText::new(Phone::ReadTheText.say(lang))
             .size(16.0)
             .strong()
-            .color(ui.visuals().selection.stroke.color),
+            .color(egui::Color32::WHITE),
     )
-    .fill(ui.visuals().selection.bg_fill)
+    .fill(ui.visuals().selection.stroke.color)
     .corner_radius(10.0);
     let pressed = ui
         .add_enabled_ui(ready, |ui| ui.add_sized([wide, 46.0], read).clicked())
