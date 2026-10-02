@@ -330,6 +330,7 @@ impl Window {
             picture_minis: Vec::new(),
             finding: None,
             filling: None,
+            tick_after_the_field: None,
             pen: crate::window_state::Pen::default(),
             marker: crate::window_state::Pen::marker(),
             shape: crate::window_state::Shape::default(),
@@ -595,6 +596,7 @@ impl Window {
                     Message::EditFailedUnexpectedly.say(self.lang),
                 )));
             self.save_after_the_field = false;
+            self.tick_after_the_field = None;
             self.saving_then_leaving = None;
             return;
         };
@@ -1628,6 +1630,7 @@ impl Window {
         self.selection_handles.set(None);
         self.fit_the_window_to_the_screen(ctx);
         self.collect(ctx);
+        self.tick_what_waited(ctx);
         self.ai_windows(ctx);
         self.record_the_frame();
         self.keep_live(ctx);
